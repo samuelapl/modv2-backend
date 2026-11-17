@@ -240,16 +240,24 @@ export async function createPreTrainedApplicationInTx(
     createdById: string;
     prior: ResolvedPriorPermit;
     applicationNumber: string;
+    /**
+     * Driver self-declaration: the case waits for an officer to verify the
+     * permit scan before it can go to command approval.
+     */
+    declaredByDriver?: boolean;
   },
 ) {
-  const status = ApplicationStatus.READY_FOR_APPROVAL;
+  const declared = params.declaredByDriver === true;
+  const status = declared
+    ? ApplicationStatus.PENDING_VERIFICATION
+    : ApplicationStatus.READY_FOR_APPROVAL;
   const app = await tx.application.create({
     data: {
       applicationNumber: params.applicationNumber,
       driverProfileId: params.driverProfileId,
       type: ApplicationType.PRE_TRAINED,
       status,
-      currentStage: `${formatStageLabel(status)} — existing permit ${params.prior.permitNumber}`,
+      currentStage: `${formatStageLabel(status)} — ${declared ? 'declared' : 'existing'} permit ${params.prior.permitNumber}`,
       createdById: params.createdById,
       requestedCategories: {
         create: params.prior.categoryIds.map((categoryId) => ({ categoryId })),
@@ -275,7 +283,9 @@ export async function createPreTrainedApplicationInTx(
   await tx.auditLog.create({
     data: {
       userId: params.createdById,
-      action: 'CREATE_PRE_TRAINED_APPLICATION',
+      action: declared
+        ? 'DECLARE_EXISTING_PERMIT'
+        : 'CREATE_PRE_TRAINED_APPLICATION',
       entityType: 'Application',
       entityId: app.id,
       newValue: {

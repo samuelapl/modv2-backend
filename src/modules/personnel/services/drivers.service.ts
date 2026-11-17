@@ -40,6 +40,7 @@ import {
   loadPriorPermitLookup,
   resolvePriorPermit,
 } from '../../applications/helpers/prior-permit.helper';
+import { resolvePermitState } from '../../applications/helpers/permit-state.helper';
 
 export interface RequestUserContext {
   id: string;
@@ -725,10 +726,18 @@ export class DriversService {
         'Driver profile not found.',
       );
     }
+    const permit = await resolvePermitState(this.prisma, {
+      id: profile.id,
+      userId: profile.userId,
+    });
     return {
       ...profile,
       missingFields: missingProfileFields(profile),
       lockedFields: lockedProfileFields(profile),
+      // NONE | PENDING_VERIFICATION | RETURNED | EXISTING_PERMIT | CARD_ISSUED
+      permitState: permit.permitState,
+      permit: permit.permit,
+      declaration: permit.declaration,
     };
   }
 

@@ -22,8 +22,9 @@ describe('ApplicationsService', () => {
   const mockTx = {
     applicationApproval: { create: jest.fn() },
     applicationItem: { deleteMany: jest.fn(), createMany: jest.fn() },
-    application: { update: jest.fn() },
+    application: { update: jest.fn(), findUniqueOrThrow: jest.fn() },
     priorPermit: { upsert: jest.fn() },
+    issuedCredential: { findUnique: jest.fn(), create: jest.fn() },
     auditLog: { create: jest.fn() },
   };
 
@@ -364,9 +365,9 @@ describe('ApplicationsService', () => {
       },
     ]);
 
-    mockPrisma.application.findFirst.mockResolvedValueOnce({
-      applicationNumber: 'APP-2026-00009',
-    });
+    mockPrisma.application.findFirst
+      .mockResolvedValueOnce(null) // no open permit declaration
+      .mockResolvedValueOnce({ applicationNumber: 'APP-2026-00009' });
 
     await expect(
       service.create(
@@ -532,6 +533,18 @@ describe('ApplicationsService', () => {
       applicationNumber: `APP-${where.id}`,
       status: data.status,
     }));
+    mockTx.application.findUniqueOrThrow.mockImplementation(async ({ where }: any) => ({
+      id: where.id,
+      driverProfileId: 'drv-1',
+      requestedCategories: [{ categoryId: 'cat-lv' }],
+      priorPermit: {
+        permitNumber: `P-${where.id}`,
+        issueDate: new Date('2024-01-01'),
+        expiryDate: new Date(Date.now() + 365 * 24 * 3600 * 1000),
+      },
+    }));
+    mockTx.issuedCredential.findUnique.mockResolvedValue(null);
+    mockTx.issuedCredential.create.mockResolvedValue({ id: 'c', credentialNumber: 'P' });
 
     const summary = await service.bulkApprove(
       { applicationIds: ['app-a', 'app-own', 'app-b', 'app-a'] },
@@ -543,6 +556,13 @@ describe('ApplicationsService', () => {
     expect(summary.failedCount).toBe(1);
     const own = summary.results.find((r) => r.applicationId === 'app-own');
     expect(own?.status).toBe('FAILED');
+    // Approval records the permit as an authorization WITHOUT a card.
+    expect(mockTx.issuedCredential.create).toHaveBeenCalledTimes(2);
+    expect(mockTx.issuedCredential.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ cardIssued: false }),
+      }),
+    );
     expect(own?.error).toMatch(/Maker-Checker/);
     expect(mockPrisma.auditLog.create).toHaveBeenCalledTimes(2);
   });

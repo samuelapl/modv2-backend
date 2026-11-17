@@ -26,6 +26,8 @@ describe('DriversService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
       },
+      issuedCredential: { findMany: jest.fn().mockResolvedValue([]) },
+      application: { findFirst: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
     };
 
@@ -761,6 +763,7 @@ describe('DriversService', () => {
           prisma.driverProfile.findUnique.mockResolvedValue({ ...adminFilled, unit: {}, user: {} });
           const res: any = await service.findMine('user-1');
           expect(res.lockedFields).toEqual(['dateOfBirth', 'bloodGroup']);
+          expect(res.permitState).toBe('NONE');
           expect(res.missingFields).toContain('emergencyContactPhone');
         });
 

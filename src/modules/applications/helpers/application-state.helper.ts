@@ -6,6 +6,7 @@ export const OPEN_APPLICATION_STATUSES: ApplicationStatus[] = [
   ApplicationStatus.TRAINING_PENDING,
   ApplicationStatus.EXAM_PENDING,
   ApplicationStatus.MEDICAL_PENDING,
+  ApplicationStatus.PENDING_VERIFICATION,
   ApplicationStatus.READY_FOR_APPROVAL,
 ];
 
@@ -121,6 +122,8 @@ export function formatStageLabel(status: ApplicationStatus): string {
       return 'Awaiting Theory & Practical Exams';
     case ApplicationStatus.MEDICAL_PENDING:
       return 'Awaiting Medical Fitness Clearance';
+    case ApplicationStatus.PENDING_VERIFICATION:
+      return 'Awaiting Permit Verification';
     case ApplicationStatus.READY_FOR_APPROVAL:
       return 'Ready for Command Approval';
     case ApplicationStatus.APPROVED:

@@ -234,6 +234,8 @@ enum ApplicationStatus {
   APPROVED
   REJECTED
   RETURNED_FOR_CORRECTION
+  // Driver-declared existing permit awaiting an officer's check of the scan.
+  PENDING_VERIFICATION
 }
 
 model Application {
@@ -475,6 +477,11 @@ model IssuedCredential {
   issuerUserId       String
   issuer             User             @relation("IssuerRelation", fields: [issuerUserId], references: [id])
   activeRestrictions String[] // e.g. ["CORRECTIVE_LENSES"]
+
+  // false = record of a permit issued before this system (authorized, but no
+  // MoD card/QR). A real card (true) only comes from issuance, replacement,
+  // renewal or an added category. Existing rows keep their card (default true).
+  cardIssued Boolean @default(true)
 
   // Permanent revocation (set only when status = REVOKED)
   revokedAt            DateTime?

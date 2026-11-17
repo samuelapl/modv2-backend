@@ -24,6 +24,8 @@ describe('CredentialsService', () => {
       updateMany: jest.fn(),
       update: jest.fn(),
       create: jest.fn(),
+      findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
     },
     application: { update: jest.fn() },
     auditLog: { create: jest.fn() },
@@ -35,6 +37,7 @@ describe('CredentialsService', () => {
       findFirst: jest.fn(),
       findMany: jest.fn(),
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       count: jest.fn(),
     },
     $transaction: jest.fn((fn: (tx: any) => any) => fn(mockTx)),
@@ -350,7 +353,7 @@ describe('CredentialsService', () => {
       priorPermit,
     });
 
-    it('keeps the original issue and expiry dates of the existing permit', async () => {
+    it('records the existing permit with its original number and dates and NO card', async () => {
       const issueDate = new Date('2024-05-10T00:00:00.000Z');
       const expiryDate = new Date();
       expiryDate.setFullYear(expiryDate.getFullYear() + 1);
@@ -358,28 +361,41 @@ describe('CredentialsService', () => {
       mockPrisma.application.findUnique.mockResolvedValue(
         preTrainedApp({ permitNumber: 'MOD-P-1234', issueDate, expiryDate }),
       );
-      mockPrisma.issuedCredential.findMany.mockResolvedValue([]);
-      mockPrisma.issuedCredential.findFirst.mockResolvedValue(null);
+      mockTx.issuedCredential.findUnique.mockResolvedValue(null);
       mockTx.issuedCredential.create.mockImplementation(async ({ data }: any) => ({
         id: 'cred-pt',
         ...data,
-        categories: [],
       }));
+      mockPrisma.issuedCredential.findUniqueOrThrow.mockResolvedValue({
+        id: 'cred-pt',
+        credentialNumber: 'MOD-P-1234',
+        cardIssued: false,
+        issueDate,
+        expiryDate,
+      });
 
-      const issued = await service.issueFromApplication(
+      const issued: any = await service.issueFromApplication(
         { applicationId: 'app-pt', validityYearsOverride: 5 } as any,
         issuerUser,
       );
 
-      expect(issued.issueDate.toISOString()).toBe(issueDate.toISOString());
-      expect(issued.expiryDate.toISOString()).toBe(expiryDate.toISOString());
-      expect(issued.credentialNumber).toMatch(
-        new RegExp(`^MOD-AUTH-${new Date().getFullYear()}-`),
+      expect(mockTx.issuedCredential.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            credentialNumber: 'MOD-P-1234',
+            cardIssued: false,
+            issueDate,
+            expiryDate,
+          }),
+        }),
       );
+      expect(issued.qrDataUrl).toBeNull();
+      expect(issued.cardIssued).toBe(false);
       expect(mockTx.auditLog.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            newValue: expect.objectContaining({ priorPermitNumber: 'MOD-P-1234' }),
+            action: 'RECORD_EXISTING_PERMIT',
+            newValue: expect.objectContaining({ permitNumber: 'MOD-P-1234' }),
           }),
         }),
       );
@@ -438,6 +454,7 @@ describe('CredentialsService', () => {
         printCount: 0,
         printedAt: null,
         qrHashSignature: 'mock-sig',
+        cardIssued: true,
         status: CredentialStatus.ACTIVE,
         expiryDate: new Date('2028-01-01'),
         driverProfile: {
@@ -471,12 +488,27 @@ describe('CredentialsService', () => {
       );
     });
 
+    it('refuses to print an existing-permit record (no card issued)', async () => {
+      mockPrisma.issuedCredential.findUnique.mockResolvedValue({
+        id: 'cred-nocard',
+        credentialNumber: 'MOD-P-1234',
+        cardIssued: false,
+        printCount: 0,
+        printedAt: null,
+      });
+
+      await expect(
+        service.recordPrint('cred-nocard', issuerUser),
+      ).rejects.toThrow(/no MoD card/i);
+    });
+
     it('blocks subsequent prints with 409 Conflict', async () => {
       mockPrisma.issuedCredential.findUnique.mockResolvedValue({
         id: 'cred-print-2',
         credentialNumber: 'MOD-AUTH-2026-0043',
         printCount: 1,
         printedAt: new Date(),
+        cardIssued: true,
       });
 
       await expect(

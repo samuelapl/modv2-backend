@@ -5,6 +5,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsDateString,
+  IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -65,6 +66,36 @@ export class BulkDecideApplicationsDto {
   applicationIds: string[];
 
   @ApiPropertyOptional({ example: 'Existing permits verified against unit records.' })
+  @IsOptional()
+  @IsString()
+  comments?: string;
+}
+
+/** Driver self-declaration of a permit held before this system. */
+export class DeclarePermitDto {
+  @ApiProperty({
+    type: PriorPermitDto,
+    description: 'documentUrl (scan of the permit) is mandatory for a declaration',
+  })
+  @ValidateNested()
+  @Type(() => PriorPermitDto)
+  priorPermit: PriorPermitDto;
+}
+
+export enum VerifyDeclarationAction {
+  APPROVE = 'APPROVE',
+  RETURN = 'RETURN',
+}
+
+/** Officer verdict on a driver's permit declaration. */
+export class VerifyDeclarationDto {
+  @ApiProperty({ enum: VerifyDeclarationAction })
+  @IsEnum(VerifyDeclarationAction)
+  action: VerifyDeclarationAction;
+
+  @ApiPropertyOptional({
+    description: 'Required when returning the declaration to the driver',
+  })
   @IsOptional()
   @IsString()
   comments?: string;

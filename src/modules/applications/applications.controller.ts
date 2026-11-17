@@ -29,6 +29,8 @@ import { ApproveApplicationDto } from "./dto/approve-application.dto";
 import {
   BulkDecideApplicationsDto,
   CreatePreTrainedApplicationDto,
+  DeclarePermitDto,
+  VerifyDeclarationDto,
 } from "./dto/prior-permit.dto";
 
 @ApiTags("Applications")
@@ -168,6 +170,35 @@ export class ApplicationsController {
     @CurrentUser() user: RequestUserContext,
   ) {
     return this.service.createPreTrained(dto, user);
+  }
+
+  @Post("declare-permit")
+  @AuditMeta("DECLARE_EXISTING_PERMIT", "Application", "application")
+  @RequirePermissions(Permission.APPLICATIONS_CREATE)
+  @ApiOperation({
+    summary:
+      "Driver declares a permit held before this system (own profile; scan required). Nothing is authorized until an officer verifies it.",
+  })
+  declarePermit(
+    @Body() dto: DeclarePermitDto,
+    @CurrentUser() user: RequestUserContext,
+  ) {
+    return this.service.declarePermit(dto, user);
+  }
+
+  @Patch(":id/verify-declaration")
+  @AuditMeta("VERIFY_PERMIT_DECLARATION", "Application", "application")
+  @RequirePermissions(Permission.APPLICATIONS_SCREEN)
+  @ApiOperation({
+    summary:
+      "Officer approves (to command approval) or returns a driver's permit declaration with a reason",
+  })
+  verifyDeclaration(
+    @Param("id") id: string,
+    @Body() dto: VerifyDeclarationDto,
+    @CurrentUser() user: RequestUserContext,
+  ) {
+    return this.service.verifyDeclaration(id, dto, user);
   }
 
   @Patch("bulk-approve")

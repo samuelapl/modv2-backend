@@ -29,6 +29,7 @@ import {
   credentialStatusWhere,
   effectiveCredentialStatus,
 } from './helpers/credential-status.helper';
+import { createExistingPermitCredentialInTx } from './helpers/existing-permit.helper';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EXPIRING_SOON_DAYS = 90;
@@ -318,7 +319,10 @@ export class CredentialsService {
       rows.map(async (row) => ({
         ...row,
         status: effectiveCredentialStatus(row.status, row.expiryDate),
-        qrDataUrl: await generateQrDataUrl(row.qrHashSignature),
+        // An existing permit has no card, hence no QR.
+        qrDataUrl: row.cardIssued
+          ? await generateQrDataUrl(row.qrHashSignature)
+          : null,
       })),
     );
 
@@ -354,7 +358,9 @@ export class CredentialsService {
       );
     }
 
-    const qrDataUrl = await generateQrDataUrl(cred.qrHashSignature);
+    const qrDataUrl = cred.cardIssued
+      ? await generateQrDataUrl(cred.qrHashSignature)
+      : null;
     return {
       ...cred,
       status: effectiveCredentialStatus(cred.status, cred.expiryDate),
@@ -382,6 +388,14 @@ export class CredentialsService {
         'CREDENTIAL_ACCESS_DENIED',
         {},
         'Only credential issuers are authorized to print driving permits.',
+      );
+    }
+
+    if (!cred.cardIssued) {
+      throw new AppBadRequestException(
+        'CREDENTIAL_NO_CARD_ISSUED',
+        { credentialNumber: cred.credentialNumber },
+        'No MoD card has been issued for this permit, so there is nothing to print.',
       );
     }
 
@@ -576,6 +590,24 @@ export class CredentialsService {
       );
     }
 
+    // Pre-trained drivers keep the permit they already hold: it is recorded as
+    // an authorization with its original number and dates, but no card is
+    // issued. (Normally done at command approval; this covers cases approved
+    // before that change.)
+    if (app.type === ApplicationType.PRE_TRAINED) {
+      const recorded = await this.prisma.$transaction((tx) =>
+        createExistingPermitCredentialInTx(tx, {
+          app,
+          issuerUserId: issuer.id,
+        }),
+      );
+      const full = await this.prisma.issuedCredential.findUniqueOrThrow({
+        where: { id: recorded.id },
+        include: CREDENTIAL_INCLUDE,
+      });
+      return { ...full, qrDataUrl: null };
+    }
+
     // A renewal also replaces a permit that lapsed inside the grace period.
     const activeCreds = await this.prisma.issuedCredential.findMany({
       where: {
@@ -624,32 +656,6 @@ export class CredentialsService {
     let issueDate = new Date();
     let expiryDate = new Date(issueDate);
     expiryDate.setFullYear(expiryDate.getFullYear() + minValidityYears);
-
-    // Pre-trained drivers keep the original dates of their existing permit.
-    if (app.type === ApplicationType.PRE_TRAINED) {
-      if (!app.priorPermit) {
-        throw new AppBadRequestException(
-          'CREDENTIAL_PRETRAINED_NO_PRIOR_PERMIT',
-          {},
-          'Pre-trained application has no existing permit record; cannot determine permit dates.',
-        );
-      }
-      if (new Date(app.priorPermit.expiryDate) <= new Date()) {
-        const priorExpiredDate = new Date(app.priorPermit.expiryDate)
-          .toISOString()
-          .slice(0, 10);
-        throw new AppBadRequestException(
-          'CREDENTIAL_PRIOR_PERMIT_EXPIRED',
-          {
-            permit: app.priorPermit.permitNumber,
-            expiredDate: priorExpiredDate,
-          },
-          `Existing permit ${app.priorPermit.permitNumber} expired on ${priorExpiredDate}. An expired permit cannot be issued; use the standard authorization workflow.`,
-        );
-      }
-      issueDate = new Date(app.priorPermit.issueDate);
-      expiryDate = new Date(app.priorPermit.expiryDate);
-    }
 
     // Replacement: same validity as the permit it replaces — only the
     // number, serial and QR change.
@@ -834,8 +840,9 @@ export class CredentialsService {
       };
     }
 
+    // Only real cards carry a QR; existing-permit records are never matched.
     const credential = await this.prisma.issuedCredential.findFirst({
-      where: { qrHashSignature: token.trim() },
+      where: { qrHashSignature: token.trim(), cardIssued: true },
       include: CREDENTIAL_INCLUDE,
     });
 

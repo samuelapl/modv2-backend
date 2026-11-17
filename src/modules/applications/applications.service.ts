@@ -24,7 +24,12 @@ import { ApproveApplicationDto } from './dto/approve-application.dto';
 import {
   BulkDecideApplicationsDto,
   CreatePreTrainedApplicationDto,
+  DeclarePermitDto,
+  VerifyDeclarationAction,
+  VerifyDeclarationDto,
 } from './dto/prior-permit.dto';
+import { PENDING_PERMIT_STATUSES } from './helpers/permit-state.helper';
+import { createExistingPermitCredentialInTx } from '../credentials/helpers/existing-permit.helper';
 import {
   DIRECT_APPROVAL_TYPES,
   OPEN_APPLICATION_STATUSES,
@@ -304,6 +309,7 @@ export class ApplicationsService {
     }
 
     await this.assertProfileComplete(driver.id);
+    await this.assertNoOpenDeclaration(driver.id);
 
     const submitNow = dto.submitImmediately !== false;
     const isReplacement = dto.type === ApplicationType.REPLACEMENT;
@@ -528,6 +534,203 @@ export class ApplicationsService {
     }
   }
 
+  /**
+   * A driver declares a permit held before this system. Creates a PRE_TRAINED
+   * application in PENDING_VERIFICATION; nothing is authorized until an officer
+   * verifies the scan (verifyDeclaration) and command approval follows. A driver
+   * can only declare for their own profile.
+   */
+  async declarePermit(dto: DeclarePermitDto, user: RequestUserContext) {
+    const driver = await this.prisma.driverProfile.findUnique({
+      where: { userId: user.id },
+      select: {
+        id: true,
+        userId: true,
+        dateOfBirth: true,
+        personnelStatus: true,
+      },
+    });
+    if (!driver) {
+      throw new AppNotFoundException(
+        'APPLICATION_DRIVER_PROFILE_NOT_FOUND',
+        {},
+        'Driver profile not found.',
+      );
+    }
+
+    if (INELIGIBLE_PERSONNEL.includes(driver.personnelStatus)) {
+      throw new AppBadRequestException(
+        'DRIVER_STATUS_CANNOT_BE_AUTHORIZED',
+        { status: driver.personnelStatus },
+        `Driver with status ${driver.personnelStatus} cannot be granted an authorization.`,
+      );
+    }
+
+    await this.assertProfileComplete(driver.id);
+
+    if (!dto.priorPermit.documentUrl?.trim()) {
+      throw new AppBadRequestException(
+        'DECLARATION_SCAN_REQUIRED',
+        {},
+        'Upload a scan of your existing permit to submit the declaration.',
+      );
+    }
+
+    // Any permit record (card or not) means the driver is already known.
+    const credential = await this.prisma.issuedCredential.findFirst({
+      where: { driverProfileId: driver.id },
+      select: { credentialNumber: true },
+    });
+    if (credential) {
+      throw new AppBadRequestException(
+        'DECLARATION_HAS_CREDENTIAL',
+        { credential: credential.credentialNumber },
+        `Driver already holds MoD credential ${credential.credentialNumber}.`,
+      );
+    }
+
+    const inFlight = await this.prisma.application.findFirst({
+      where: {
+        driverProfileId: driver.id,
+        type: ApplicationType.PRE_TRAINED,
+        status: { in: PENDING_PERMIT_STATUSES },
+      },
+      select: { applicationNumber: true },
+    });
+    if (inFlight) {
+      throw new AppBadRequestException(
+        'DECLARATION_ALREADY_EXISTS',
+        { application: inFlight.applicationNumber },
+        `An existing-permit case (${inFlight.applicationNumber}) is already open for you.`,
+      );
+    }
+
+    if (!driver.dateOfBirth) {
+      throw new AppBadRequestException(
+        'DRIVER_DOB_REQUIRED_FOR_PRIOR_PERMIT',
+        {},
+        'Date of birth is required when recording an existing permit.',
+      );
+    }
+    // Same checks as officer registration: categories, age, dates, expiry and
+    // an unused permit number.
+    const lookup = await loadPriorPermitLookup(this.prisma, [dto.priorPermit]);
+    const prior = resolvePriorPermit(
+      dto.priorPermit,
+      new Date(driver.dateOfBirth),
+      lookup,
+    );
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const created = await this.prisma.$transaction(async (tx) =>
+          createPreTrainedApplicationInTx(tx, {
+            driverProfileId: driver.id,
+            createdById: user.id,
+            prior,
+            applicationNumber: await generateApplicationNumber(tx, attempt),
+            declaredByDriver: true,
+          }),
+        );
+        this.eventEmitter?.emit('application.submitted', {
+          applicationId: created.id,
+          applicationNumber: created.applicationNumber,
+          driverUserId: driver.userId,
+        });
+        return this.prisma.application.findUnique({
+          where: { id: created.id },
+          include: APPLICATION_INCLUDE,
+        });
+      } catch (err) {
+        if (attempt < 4 && isApplicationNumberCollision(err)) continue;
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * An officer checks the scan of a declared permit. APPROVE moves the case to
+   * command approval (which then records the permit without a card); RETURN
+   * sends it back to the driver with a reason to correct and resubmit.
+   */
+  async verifyDeclaration(
+    id: string,
+    dto: VerifyDeclarationDto,
+    officer: RequestUserContext,
+  ) {
+    const app = await this.prisma.application.findUnique({
+      where: { id },
+      include: { driverProfile: { select: { userId: true } } },
+    });
+    if (!app || app.type !== ApplicationType.PRE_TRAINED) {
+      throw new AppNotFoundException(
+        'APPLICATION_NOT_FOUND',
+        {},
+        'Application record not found.',
+      );
+    }
+    if (app.driverProfile.userId === officer.id) {
+      throw new AppForbiddenException(
+        'DECLARATION_VERIFY_OWN_NOT_ALLOWED',
+        {},
+        'Separation of Duties: you cannot verify your own permit declaration.',
+      );
+    }
+    if (app.status !== ApplicationStatus.PENDING_VERIFICATION) {
+      throw new AppBadRequestException(
+        'DECLARATION_NOT_PENDING_VERIFICATION',
+        { status: app.status },
+        `This declaration is not waiting for verification (current status: ${app.status}).`,
+      );
+    }
+    const comments = dto.comments?.trim() || null;
+    const approve = dto.action === VerifyDeclarationAction.APPROVE;
+    if (!approve && !comments) {
+      throw new AppBadRequestException(
+        'DECLARATION_VERIFICATION_COMMENTS_REQUIRED',
+        {},
+        'A reason is required when returning a declaration to the driver.',
+      );
+    }
+
+    const nextStatus = approve
+      ? ApplicationStatus.READY_FOR_APPROVAL
+      : ApplicationStatus.RETURNED_FOR_CORRECTION;
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      await tx.applicationApproval.create({
+        data: {
+          applicationId: id,
+          officerUserId: officer.id,
+          action: approve ? ApprovalAction.RECOMMENDED : ApprovalAction.RETURNED,
+          comments,
+        },
+      });
+      return tx.application.update({
+        where: { id },
+        data: {
+          status: nextStatus,
+          currentStage: approve
+            ? `${formatStageLabel(nextStatus)} — permit verified`
+            : formatStageLabel(nextStatus),
+          rejectionReason: approve ? null : comments,
+        },
+        include: APPLICATION_INCLUDE,
+      });
+    });
+
+    if (!approve) {
+      this.eventEmitter?.emit('application.status_changed', {
+        applicationId: result.id,
+        applicationNumber: result.applicationNumber,
+        driverUserId: app.driverProfile.userId,
+        newStatus: nextStatus,
+        comments: comments ?? undefined,
+      });
+    }
+    return result;
+  }
+
   async submit(id: string, dto: SubmitApplicationDto, user: RequestUserContext) {
     const existing = await this.prisma.application.findUnique({
       where: { id },
@@ -670,6 +873,11 @@ export class ApplicationsService {
       await this.attachApplicationPhoto(existing.driverProfileId, dto.photoUrl, true);
     }
 
+    // A permit the driver declared themselves goes back to verification.
+    const submittedStatus =
+      isPreTrained && existing.createdById === existing.driverProfile.userId
+        ? ApplicationStatus.PENDING_VERIFICATION
+        : ApplicationStatus.SUBMITTED;
     const noteSuffix = notes ? ` — ${notes}` : '';
     const prior = existing.priorPermit;
     const snapshotPermit = (pp: {
@@ -741,9 +949,9 @@ export class ApplicationsService {
       return tx.application.update({
         where: { id },
         data: {
-          status: ApplicationStatus.SUBMITTED,
+          status: submittedStatus,
           rejectionReason: null,
-          currentStage: `${formatStageLabel(ApplicationStatus.SUBMITTED)}${noteSuffix}`,
+          currentStage: `${formatStageLabel(submittedStatus)}${noteSuffix}`,
           ...(replacement
             ? {
                 replacementReason,
@@ -985,6 +1193,10 @@ export class ApplicationsService {
           ? ApplicationStatus.RETURNED_FOR_CORRECTION
           : ApplicationStatus.REJECTED;
 
+    const recordExistingPermit =
+      nextStatus === ApplicationStatus.APPROVED &&
+      app.type === ApplicationType.PRE_TRAINED;
+
     const result = await this.prisma.$transaction(async (tx) => {
       await tx.applicationApproval.create({
         data: {
@@ -995,11 +1207,31 @@ export class ApplicationsService {
         },
       });
 
+      // An already-trained driver is authorized from the permit they hold; no
+      // card is issued (that only happens on replacement / renewal / upgrade).
+      if (recordExistingPermit) {
+        const full = await tx.application.findUniqueOrThrow({
+          where: { id },
+          select: {
+            id: true,
+            driverProfileId: true,
+            priorPermit: true,
+            requestedCategories: { select: { categoryId: true } },
+          },
+        });
+        await createExistingPermitCredentialInTx(tx, {
+          app: full,
+          issuerUserId: approver.id,
+        });
+      }
+
       return tx.application.update({
         where: { id },
         data: {
           status: nextStatus,
-          currentStage: formatStageLabel(nextStatus),
+          ...(recordExistingPermit
+            ? {}
+            : { currentStage: formatStageLabel(nextStatus) }),
           rejectionReason:
             nextStatus === ApplicationStatus.REJECTED ||
             nextStatus === ApplicationStatus.RETURNED_FOR_CORRECTION
@@ -1219,6 +1451,30 @@ export class ApplicationsService {
         where: { id: driverProfileId },
         data: { photoUrl: submitted },
       });
+    }
+  }
+
+  /** An open existing-permit declaration blocks starting a new application. */
+  private async assertNoOpenDeclaration(driverProfileId: string) {
+    const open = await this.prisma.application.findFirst({
+      where: {
+        driverProfileId,
+        type: ApplicationType.PRE_TRAINED,
+        status: {
+          in: [
+            ApplicationStatus.PENDING_VERIFICATION,
+            ApplicationStatus.RETURNED_FOR_CORRECTION,
+          ],
+        },
+      },
+      select: { applicationNumber: true },
+    });
+    if (open) {
+      throw new AppBadRequestException(
+        'DECLARATION_PENDING_BLOCKS_APPLICATION',
+        { application: open.applicationNumber },
+        `Your existing-permit declaration (${open.applicationNumber}) is still open. Wait for its outcome before starting a new application.`,
+      );
     }
   }
 

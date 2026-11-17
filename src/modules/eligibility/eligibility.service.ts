@@ -192,6 +192,7 @@ export class EligibilityService {
         ? {
             credentialNumber: credential.credentialNumber,
             serialNumber: credential.serialNumber,
+            cardIssued: credential.cardIssued,
             status: credential.status,
             issueDate: credential.issueDate,
             expiryDate: credential.expiryDate,
