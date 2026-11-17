@@ -15,7 +15,6 @@ const complete = {
   bloodGroup: 'O+',
   emergencyContactName: 'Almaz',
   emergencyContactPhone: '+251911887766',
-  photoUrl: 'p.jpg',
 };
 
 describe('profile completeness', () => {
@@ -24,15 +23,20 @@ describe('profile completeness', () => {
     expect(profileStatusFor(complete)).toBe('COMPLETE');
   });
 
+  it('the photo is not a profile requirement (it is uploaded with the application)', () => {
+    expect(REQUIRED_PROFILE_FIELDS).not.toContain('photoUrl');
+    expect(isProfileComplete(complete)).toBe(true);
+  });
+
   it('an empty profile is missing every required field', () => {
     expect(missingProfileFields({})).toEqual([...REQUIRED_PROFILE_FIELDS]);
     expect(profileStatusFor({})).toBe('INCOMPLETE');
   });
 
   it('lists exactly the missing fields', () => {
-    expect(missingProfileFields({ ...complete, photoUrl: null, bloodGroup: undefined })).toEqual([
+    expect(missingProfileFields({ ...complete, gender: null, bloodGroup: undefined })).toEqual([
+      'gender',
       'bloodGroup',
-      'photoUrl',
     ]);
   });
 
@@ -48,9 +52,8 @@ describe('profile completeness', () => {
 
   describe('locked fields (entered by an administrator)', () => {
     it('locks filled fields the driver did not type themselves', () => {
-      expect(lockedProfileFields({ ...complete, selfEnteredFields: ['photoUrl'] })).toEqual([
+      expect(lockedProfileFields({ ...complete, selfEnteredFields: ['gender'] })).toEqual([
         'dateOfBirth',
-        'gender',
         'nationalIdNumber',
         'bloodGroup',
         'emergencyContactName',

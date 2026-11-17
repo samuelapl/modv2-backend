@@ -351,7 +351,10 @@ export class ApplicationsService {
         // A replacement re-issues categories already held; no new qualification.
         preTrained: isReplacement,
       });
+      await this.attachApplicationPhoto(dto.driverProfileId, dto.photoUrl, true);
     } else {
+      // A draft may already carry the photo; it is only demanded on submission.
+      await this.attachApplicationPhoto(dto.driverProfileId, dto.photoUrl, false);
       const catCount = await this.prisma.vehicleCategory.count({
         where: { id: { in: uniqueCategoryIds }, isActive: true },
       });
@@ -661,6 +664,11 @@ export class ApplicationsService {
       excludeApplicationId: existing.id,
       preTrained: isPreTrained || isReplacement,
     });
+
+    // Officer-recorded (pre-trained) applications are not submitted by the driver.
+    if (!isPreTrained) {
+      await this.attachApplicationPhoto(existing.driverProfileId, dto.photoUrl, true);
+    }
 
     const noteSuffix = notes ? ` — ${notes}` : '';
     const prior = existing.priorPermit;
@@ -1185,7 +1193,37 @@ export class ApplicationsService {
   }
 
   /**
-   * A driver must finish their profile (DOB, ID, photo, ...) before applying.
+   * The 3 x 4 photo that goes on the permit is supplied with the application.
+   * A photo uploaded now replaces the one on file; when none is uploaded the one
+   * already on file is reused. `required` (submission) fails when there is neither.
+   */
+  private async attachApplicationPhoto(
+    driverProfileId: string,
+    photoUrl: string | undefined,
+    required: boolean,
+  ) {
+    const submitted = photoUrl?.trim() || null;
+    const profile = await this.prisma.driverProfile.findUnique({
+      where: { id: driverProfileId },
+      select: { photoUrl: true },
+    });
+    if (required && !submitted && !profile?.photoUrl) {
+      throw new AppBadRequestException(
+        'APPLICATION_PHOTO_REQUIRED',
+        {},
+        'Upload a 3 x 4 photo to submit the application.',
+      );
+    }
+    if (submitted && submitted !== profile?.photoUrl) {
+      await this.prisma.driverProfile.update({
+        where: { id: driverProfileId },
+        data: { photoUrl: submitted },
+      });
+    }
+  }
+
+  /**
+   * A driver must finish their profile (DOB, ID, ...) before applying.
    * Enforced here so it holds regardless of which client calls the API.
    */
   private async assertProfileComplete(driverProfileId: string) {
@@ -1196,7 +1234,6 @@ export class ApplicationsService {
         gender: true,
         nationalIdNumber: true,
         bloodGroup: true,
-        photoUrl: true,
         emergencyContactName: true,
         emergencyContactPhone: true,
       },

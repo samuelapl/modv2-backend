@@ -83,6 +83,9 @@ export class DriversService {
     if (query.personnelStatus) {
       where.personnelStatus = query.personnelStatus;
     }
+    if (query.profileStatus) {
+      where.profileStatus = query.profileStatus;
+    }
     if (query.verifiedOnly) {
       where.identityVerifiedAt = { not: null };
     }
@@ -660,7 +663,6 @@ export class DriversService {
       gender: dto.gender,
       nationalIdNumber: normalizedNationalId,
       bloodGroup: dto.bloodGroup,
-      photoUrl: dto.photoUrl,
       emergencyContactName: dto.emergencyContactName?.trim() || null,
       emergencyContactPhone: dto.emergencyContactPhone?.trim() || null,
     });
@@ -941,7 +943,6 @@ export class DriversService {
           ? data.nationalIdNumber
           : existing.nationalIdNumber,
       bloodGroup: data.bloodGroup ?? existing.bloodGroup,
-      photoUrl: data.photoUrl ?? existing.photoUrl,
       emergencyContactName:
         data.emergencyContactName !== undefined
           ? data.emergencyContactName

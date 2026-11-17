@@ -3,6 +3,8 @@ import { ProfileStatus } from '@prisma/client';
 /**
  * Fields a driver must have before applying for a permit. One list, used by the
  * self-service endpoints, admin edits, and the application gate.
+ * The photo is deliberately not here: it is uploaded with the application itself
+ * (a 3 x 4 photo for the permit), not during onboarding.
  */
 export const REQUIRED_PROFILE_FIELDS = [
   'dateOfBirth',
@@ -11,7 +13,6 @@ export const REQUIRED_PROFILE_FIELDS = [
   'bloodGroup',
   'emergencyContactName',
   'emergencyContactPhone',
-  'photoUrl',
 ] as const;
 
 export type RequiredProfileField = (typeof REQUIRED_PROFILE_FIELDS)[number];

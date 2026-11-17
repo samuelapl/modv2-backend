@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { PersonnelStatus } from '@prisma/client';
+import { PersonnelStatus, ProfileStatus } from '@prisma/client';
 import { Transform } from 'class-transformer';
 import {
   IsBoolean,
@@ -21,6 +21,14 @@ export class QueryDriversDto extends PaginationDto {
   @IsOptional()
   @IsEnum(PersonnelStatus)
   personnelStatus?: PersonnelStatus;
+
+  @ApiPropertyOptional({
+    enum: ProfileStatus,
+    description: 'COMPLETE = every required self-service field filled; INCOMPLETE = still missing some.',
+  })
+  @IsOptional()
+  @IsEnum(ProfileStatus)
+  profileStatus?: ProfileStatus;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -215,9 +215,10 @@ describe('Driver onboarding (e2e)', () => {
           'bloodGroup',
           'emergencyContactName',
           'emergencyContactPhone',
-          'photoUrl',
         ]),
       );
+      // the photo is not part of onboarding: it is uploaded with the application
+      expect(res.body.data.missingFields).not.toContain('photoUrl');
     });
 
     it('cannot apply while the profile is incomplete (403 PROFILE_INCOMPLETE)', async () => {
@@ -255,7 +256,7 @@ describe('Driver onboarding (e2e)', () => {
         .expect(200);
       expect(part.body.data.profileStatus).toBe('INCOMPLETE');
       expect(part.body.data.missingFields).toEqual(
-        expect.arrayContaining(['bloodGroup', 'photoUrl']),
+        expect.arrayContaining(['bloodGroup', 'emergencyContactName']),
       );
 
       const done = await request(server())
@@ -263,7 +264,6 @@ describe('Driver onboarding (e2e)', () => {
         .set('Authorization', `Bearer ${driverToken}`)
         .send({
           bloodGroup: 'O+',
-          photoUrl: 'onb-photo.jpg',
           emergencyContactName: 'Almaz',
           emergencyContactPhone: '+251911000301',
         })
@@ -275,13 +275,54 @@ describe('Driver onboarding (e2e)', () => {
       expect(me.body.data.profileStatus).toBe('COMPLETE');
     });
 
-    it('can apply once the profile is complete', async () => {
+    it('the photo cannot be set through the profile any more', async () => {
+      await request(server())
+        .patch('/api/v1/personnel/drivers/me')
+        .set('Authorization', `Bearer ${driverToken}`)
+        .send({ photoUrl: 'sneaky.jpg' })
+        .expect(400);
+    });
+
+    it('a complete profile still cannot be submitted without the 3 x 4 photo', async () => {
       const res = await request(server())
         .post('/api/v1/applications')
         .set('Authorization', `Bearer ${driverToken}`)
         .send({ driverProfileId: driverId, type: 'NEW_AUTHORIZATION', categoryIds: [catSpId] })
+        .expect(400);
+      expect(JSON.stringify(res.body)).toContain('APPLICATION_PHOTO_REQUIRED');
+      expect(await prisma.application.count({ where: { driverProfileId: driverId } })).toBe(0);
+    });
+
+    it('a draft can be saved without a photo', async () => {
+      const res = await request(server())
+        .post('/api/v1/applications')
+        .set('Authorization', `Bearer ${driverToken}`)
+        .send({ driverProfileId: driverId, type: 'NEW_AUTHORIZATION', categoryIds: [catSpId], submitImmediately: false })
         .expect(201);
+      expect(res.body.data.status).toBe('DRAFT');
       createdAppIds.push(res.body.data.id);
+
+      // submitting that draft later still needs the photo
+      const submit = await request(server())
+        .patch(`/api/v1/applications/${res.body.data.id}/submit`)
+        .set('Authorization', `Bearer ${driverToken}`)
+        .send({})
+        .expect(400);
+      expect(JSON.stringify(submit.body)).toContain('APPLICATION_PHOTO_REQUIRED');
+    });
+
+    it('uploading the photo with the application submits it and keeps the photo on the profile', async () => {
+      // the draft is in the way of a duplicate, so submit that one with the photo
+      const draftId = createdAppIds[createdAppIds.length - 1];
+      const res = await request(server())
+        .patch(`/api/v1/applications/${draftId}/submit`)
+        .set('Authorization', `Bearer ${driverToken}`)
+        .send({ photoUrl: 'onb-photo-3x4.jpg' })
+        .expect(200);
+      expect(res.body.data.status).toBe('SUBMITTED');
+
+      const drv = await prisma.driverProfile.findUnique({ where: { id: driverId } });
+      expect(drv?.photoUrl).toBe('onb-photo-3x4.jpg');
     });
   });
 
@@ -432,6 +473,56 @@ describe('Driver onboarding (e2e)', () => {
       const drv = await prisma.driverProfile.findUnique({ where: { userId: user!.id } });
       expect(drv).toMatchObject({ serviceNumber: staffNo, profileStatus: 'INCOMPLETE' });
       await prisma.driverProfile.delete({ where: { id: drv!.id } }); // staffNo user is cleaned up by afterAll
+    });
+  });
+
+  describe('drivers list: filter by profile status', () => {
+    const filterNo = `MOD-ONB-F-${suffix}`;
+
+    afterAll(async () => {
+      const drv = await prisma.driverProfile.findUnique({ where: { serviceNumber: filterNo } });
+      if (drv) await prisma.driverProfile.delete({ where: { id: drv.id } });
+      await prisma.user.deleteMany({ where: { serviceNumber: filterNo } });
+    });
+
+    it('lists only complete or only incomplete profiles, and rejects other values', async () => {
+      await request(server())
+        .post('/api/v1/personnel/drivers')
+        .set('Authorization', `Bearer ${coordToken}`)
+        .send({
+          serviceNumber: filterNo,
+          firstName: 'Filter',
+          middleName: 'Check',
+          lastName: 'Tester',
+          email: `filter.${suffix}@mod.gov.et`,
+          contactPhone: '+251911000800',
+          unitId,
+        })
+        .expect(201);
+
+      const list = async (q: string) =>
+        (
+          await request(server())
+            .get(`/api/v1/personnel/drivers?limit=100&${q}`)
+            .set('Authorization', `Bearer ${adminToken}`)
+            .expect(200)
+        ).body.data.items as Array<{ serviceNumber: string; profileStatus: string }>;
+
+      const incomplete = await list('profileStatus=INCOMPLETE');
+      const complete = await list('profileStatus=COMPLETE');
+
+      expect(incomplete.length).toBeGreaterThan(0);
+      expect(incomplete.every((d) => d.profileStatus === 'INCOMPLETE')).toBe(true);
+      expect(complete.every((d) => d.profileStatus === 'COMPLETE')).toBe(true);
+      // the driver who finished the wizard above is complete; the one just registered is not
+      expect(complete.map((d) => d.serviceNumber)).toContain(driverNo);
+      expect(incomplete.map((d) => d.serviceNumber)).toContain(filterNo);
+      expect(incomplete.map((d) => d.serviceNumber)).not.toContain(driverNo);
+
+      await request(server())
+        .get('/api/v1/personnel/drivers?profileStatus=NOPE')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(400);
     });
   });
 

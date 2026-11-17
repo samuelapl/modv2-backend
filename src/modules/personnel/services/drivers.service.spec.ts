@@ -132,6 +132,46 @@ describe('DriversService', () => {
     );
   });
 
+  it.each(['COMPLETE', 'INCOMPLETE'] as const)('filters drivers by profile status %s', async (status) => {
+    prisma.driverProfile.findMany.mockResolvedValue([]);
+    prisma.driverProfile.count.mockResolvedValue(0);
+
+    await service.findAll(
+      { page: 1, limit: 10, profileStatus: status },
+      {
+        id: 'admin-1',
+        serviceNumber: 'MOD-ADMIN-001',
+        unitId: 'unit-1',
+        resolvedPermissions: [Permission.DRIVERS_VIEW_ALL],
+      },
+    );
+
+    expect(prisma.driverProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { profileStatus: status } }),
+    );
+  });
+
+  it('combines the profile filter with the unit scope and personnel status', async () => {
+    prisma.driverProfile.findMany.mockResolvedValue([]);
+    prisma.driverProfile.count.mockResolvedValue(0);
+
+    await service.findAll(
+      { page: 1, limit: 10, profileStatus: 'INCOMPLETE', personnelStatus: 'ACTIVE' as any },
+      {
+        id: 'coord-1',
+        serviceNumber: 'MOD-COORD-001',
+        unitId: 'unit-LOG',
+        resolvedPermissions: [Permission.DRIVERS_VIEW_UNIT],
+      },
+    );
+
+    expect(prisma.driverProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { unitId: 'unit-LOG', personnelStatus: 'ACTIVE', profileStatus: 'INCOMPLETE' },
+      }),
+    );
+  });
+
   it('should throw ConflictException on duplicate nationalIdNumber', async () => {
     prisma.organizationalUnit.findUnique.mockResolvedValue({ id: 'unit-1' });
     prisma.driverProfile.findUnique
@@ -644,12 +684,11 @@ describe('DriversService', () => {
             nationalIdNumber: 'FAN-1',
             bloodGroup: 'O+',
             emergencyContactName: 'Almaz',
-            emergencyContactPhone: '+251911887766',
-          }) // existing row, only the photo is missing
+          }) // existing row, only the emergency phone is missing
           .mockResolvedValue(null); // national-id duplicate lookup
         prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
 
-        await service.update('drv-1', { photoUrl: 'me.jpg' });
+        await service.update('drv-1', { emergencyContactPhone: '+251911887766' });
 
         const data = prisma.driverProfile.update.mock.calls[0][0].data;
         expect(data.profileStatus).toBe('COMPLETE');
@@ -707,7 +746,7 @@ describe('DriversService', () => {
         expect(prisma.driverProfile.findUnique.mock.calls[0][0]).toEqual(
           expect.objectContaining({ where: { userId: 'user-1' } }),
         );
-        expect(res.missingFields).toContain('photoUrl');
+        expect(res.missingFields).toContain('emergencyContactPhone');
       });
 
       describe('details entered by an administrator are read-only for the driver', () => {
@@ -722,7 +761,7 @@ describe('DriversService', () => {
           prisma.driverProfile.findUnique.mockResolvedValue({ ...adminFilled, unit: {}, user: {} });
           const res: any = await service.findMine('user-1');
           expect(res.lockedFields).toEqual(['dateOfBirth', 'bloodGroup']);
-          expect(res.missingFields).toContain('photoUrl');
+          expect(res.missingFields).toContain('emergencyContactPhone');
         });
 
         it('refuses to change one, and saves nothing', async () => {

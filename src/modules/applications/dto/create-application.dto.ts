@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   ValidateIf,
 } from 'class-validator';
 
@@ -50,4 +51,13 @@ export class CreateApplicationDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Object key of the applicant 3 x 4 photo uploaded with this application. Required to submit unless the driver already has one on file.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  photoUrl?: string;
 }

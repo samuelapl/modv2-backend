@@ -86,6 +86,63 @@ describe('ApplicationsService', () => {
     service = module.get<ApplicationsService>(ApplicationsService);
     // The profile-completeness gate has its own tests below; stub it elsewhere.
     jest.spyOn(service as any, 'assertProfileComplete').mockResolvedValue(undefined);
+    // ...and so does the application photo rule.
+    jest.spyOn(service as any, 'attachApplicationPhoto').mockResolvedValue(undefined);
+  });
+
+  describe('application photo (3 x 4), supplied with the application', () => {
+    const attach = (driverId: string, photo: string | undefined, required: boolean) =>
+      (service as any).attachApplicationPhoto(driverId, photo, required);
+
+    beforeEach(() => {
+      (service as any).attachApplicationPhoto.mockRestore();
+      mockPrisma.driverProfile.update = jest.fn().mockResolvedValue({});
+    });
+
+    it('is required to submit when there is neither an upload nor a photo on file', async () => {
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce({ photoUrl: null });
+      await expect(attach('drv-1', undefined, true)).rejects.toMatchObject({
+        response: { code: 'APPLICATION_PHOTO_REQUIRED' },
+      });
+      expect(mockPrisma.driverProfile.update).not.toHaveBeenCalled();
+    });
+
+    it('treats a blank upload as no upload', async () => {
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce({ photoUrl: null });
+      await expect(attach('drv-1', '   ', true)).rejects.toMatchObject({
+        response: { code: 'APPLICATION_PHOTO_REQUIRED' },
+      });
+    });
+
+    it('reuses the photo already on file when none is uploaded', async () => {
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce({ photoUrl: 'old.jpg' });
+      await expect(attach('drv-1', undefined, true)).resolves.toBeUndefined();
+      expect(mockPrisma.driverProfile.update).not.toHaveBeenCalled();
+    });
+
+    it('stores a newly uploaded photo as the one on file', async () => {
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce({ photoUrl: 'old.jpg' });
+      await attach('drv-1', ' new.jpg ', true);
+      expect(mockPrisma.driverProfile.update).toHaveBeenCalledWith({
+        where: { id: 'drv-1' },
+        data: { photoUrl: 'new.jpg' },
+      });
+    });
+
+    it('is not demanded for a draft, but an uploaded one is still kept', async () => {
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce({ photoUrl: null });
+      await expect(attach('drv-1', undefined, false)).resolves.toBeUndefined();
+
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce({ photoUrl: null });
+      await attach('drv-1', 'draft.jpg', false);
+      expect(mockPrisma.driverProfile.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not rewrite the profile when the same photo is sent again', async () => {
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce({ photoUrl: 'same.jpg' });
+      await attach('drv-1', 'same.jpg', true);
+      expect(mockPrisma.driverProfile.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('profile completeness gate', () => {
@@ -94,7 +151,6 @@ describe('ApplicationsService', () => {
       gender: 'MALE',
       nationalIdNumber: 'FAN-1',
       bloodGroup: 'O+',
-      photoUrl: 'p.jpg',
       emergencyContactName: 'Almaz',
       emergencyContactPhone: '+251911887766',
     };
@@ -103,7 +159,7 @@ describe('ApplicationsService', () => {
       (service as any).assertProfileComplete.mockRestore();
       mockPrisma.driverProfile.findUnique
         .mockResolvedValueOnce({ id: 'drv-1', userId: 'user-drv-1', unitId: 'unit-1' })
-        .mockResolvedValueOnce({ ...completeProfile, photoUrl: null, bloodGroup: ' ' });
+        .mockResolvedValueOnce({ ...completeProfile, nationalIdNumber: null, bloodGroup: ' ' });
 
       await expect(
         service.create(
@@ -117,7 +173,7 @@ describe('ApplicationsService', () => {
       ).rejects.toMatchObject({
         response: {
           code: 'PROFILE_INCOMPLETE',
-          params: { fields: 'bloodGroup, photoUrl' },
+          params: { fields: 'nationalIdNumber, bloodGroup' },
         },
       });
       expect(mockPrisma.application.create).not.toHaveBeenCalled();

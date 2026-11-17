@@ -38,12 +38,6 @@ export class UpdateMyProfileDto {
   @IsIn([...BLOOD_GROUPS])
   bloodGroup?: string;
 
-  @ApiPropertyOptional({ description: 'Object storage key of the uploaded photo' })
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  photoUrl?: string;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
