@@ -9,7 +9,12 @@ import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto, AuthenticatedUserDto } from './dto/auth-response.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
-import { AppBadRequestException, AppUnauthorizedException } from '../../common/errors';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import {
+  AppBadRequestException,
+  AppConflictException,
+  AppUnauthorizedException,
+} from '../../common/errors';
 
 @Injectable()
 export class AuthService {
@@ -33,7 +38,10 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { serviceNumber: normalizedServiceNumber },
-      include: { driverProfile: { select: { profileStatus: true } } },
+      include: {
+        unit: { select: { id: true, name: true, code: true } },
+        driverProfile: { select: { profileStatus: true } },
+      },
     });
 
     if (!user || !user.isActive) {
@@ -83,6 +91,7 @@ export class AuthService {
         email: user.email,
         roles: user.roles,
         unitId: user.unitId,
+        unit: (user as any).unit ?? null,
         permissions,
         preferredLocale: user.preferredLocale,
         mustChangePassword: user.mustChangePassword,
@@ -117,6 +126,13 @@ export class AuthService {
         roles: true,
         customPermissions: true,
         unitId: true,
+        unit: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
         isActive: true,
         preferredLocale: true,
         mustChangePassword: true,
@@ -143,11 +159,75 @@ export class AuthService {
       email: user.email,
       roles: user.roles,
       unitId: user.unitId,
+      unit: (user as any).unit ?? null,
       permissions,
       preferredLocale: user.preferredLocale,
       mustChangePassword: user.mustChangePassword,
       profileStatus: user.driverProfile?.profileStatus ?? null,
     };
+  }
+
+  /**
+   * Updates contact information (phone, email) for the signed-in user.
+   * If driver profile exists for this account, contactPhone is synced as well.
+   */
+  async updateProfile(
+    userId: string,
+    dto: UpdateProfileDto,
+  ): Promise<AuthenticatedUserDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, phone: true, isActive: true },
+    });
+    if (!user || !user.isActive) {
+      throw new AppUnauthorizedException(
+        'AUTH_ACCOUNT_UNAVAILABLE',
+        {},
+        'User account unavailable.',
+      );
+    }
+
+    const dataToUpdate: { phone?: string | null; email?: string | null } = {};
+
+    if (dto.phone !== undefined) {
+      dataToUpdate.phone = dto.phone ? dto.phone.trim() : null;
+    }
+
+    if (dto.email !== undefined) {
+      const normalizedEmail = dto.email ? dto.email.trim().toLowerCase() : null;
+      if (normalizedEmail && normalizedEmail !== user.email?.toLowerCase()) {
+        const existing = await this.prisma.user.findFirst({
+          where: {
+            email: { equals: normalizedEmail, mode: 'insensitive' },
+            NOT: { id: userId },
+          },
+        });
+        if (existing) {
+          throw new AppConflictException(
+            'USERS_EMAIL_EXISTS',
+            { email: normalizedEmail },
+            'A user with this email address already exists.',
+          );
+        }
+      }
+      dataToUpdate.email = normalizedEmail;
+    }
+
+    if (Object.keys(dataToUpdate).length > 0) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: dataToUpdate,
+      });
+
+      if (dataToUpdate.phone !== undefined) {
+        await this.prisma.driverProfile.updateMany({
+          where: { userId },
+          data: { contactPhone: dataToUpdate.phone },
+        });
+      }
+    }
+
+    return this.getProfile(userId);
   }
 
   /**

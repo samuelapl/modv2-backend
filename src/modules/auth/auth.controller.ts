@@ -6,6 +6,7 @@ import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto, AuthenticatedUserDto } from './dto/auth-response.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuditMeta } from '../../common/decorators/audit.decorator';
@@ -83,5 +84,17 @@ export class AuthController {
     @Body() dto: UpdatePreferencesDto,
   ) {
     return this.authService.updatePreferences(userId, dto);
+  }
+
+  @Patch('me/profile')
+  @AuditMeta('UPDATE_USER_PROFILE', 'User', 'user')
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({ summary: "Update own contact information (phone, email)" })
+  @ApiOkResponse({ type: AuthenticatedUserDto })
+  updateProfile(
+    @CurrentUser('id') userId: string,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    return this.authService.updateProfile(userId, dto);
   }
 }

@@ -10,7 +10,10 @@ import { PermissionResolverService } from '../../common/services/permission-reso
 
 describe('AuthService', () => {
   let service: AuthService;
-  let prisma: { user: { findUnique: jest.Mock; update: jest.Mock } };
+  let prisma: {
+    user: { findUnique: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
+    driverProfile: { updateMany: jest.Mock };
+  };
   let jwtService: { signAsync: jest.Mock; decode: jest.Mock };
   let redis: { set: jest.Mock };
   let permissionResolver: { resolveUserPermissions: jest.Mock };
@@ -19,7 +22,11 @@ describe('AuthService', () => {
     prisma = {
       user: {
         findUnique: jest.fn(),
+        findFirst: jest.fn(),
         update: jest.fn(),
+      },
+      driverProfile: {
+        updateMany: jest.fn(),
       },
     };
     jwtService = {
@@ -215,6 +222,71 @@ describe('AuthService', () => {
       await expect(
         service.changePassword('user-tmp', { currentPassword: 'Temp#Pass12', newPassword: 'Temp#Pass12' }, 't'),
       ).rejects.toMatchObject({ response: { code: 'AUTH_PASSWORD_UNCHANGED' } });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateProfile', () => {
+    it('updates phone and email and syncs driver profile phone', async () => {
+      prisma.user.findUnique
+        .mockResolvedValueOnce({
+          id: 'user-1',
+          email: 'old@mod.gov.et',
+          phone: '+251911000000',
+          isActive: true,
+        })
+        .mockResolvedValueOnce({
+          id: 'user-1',
+          serviceNumber: 'MOD-1309001',
+          fullName: 'Test User',
+          rank: 'Captain',
+          phone: '+251922334455',
+          email: 'new@mod.gov.et',
+          roles: [SystemRole.STAFF_DRIVER],
+          customPermissions: [],
+          unitId: 'unit-1',
+          isActive: true,
+          preferredLocale: 'en',
+          mustChangePassword: false,
+          driverProfile: { profileStatus: 'COMPLETE' },
+        });
+
+      prisma.user.findFirst.mockResolvedValue(null);
+      prisma.user.update.mockResolvedValue({});
+      prisma.driverProfile.updateMany.mockResolvedValue({ count: 1 });
+
+      const res = await service.updateProfile('user-1', {
+        phone: '+251922334455',
+        email: 'new@mod.gov.et',
+      });
+
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: {
+          phone: '+251922334455',
+          email: 'new@mod.gov.et',
+        },
+      });
+      expect(prisma.driverProfile.updateMany).toHaveBeenCalledWith({
+        where: { userId: 'user-1' },
+        data: { contactPhone: '+251922334455' },
+      });
+      expect(res.phone).toBe('+251922334455');
+      expect(res.email).toBe('new@mod.gov.et');
+    });
+
+    it('rejects an email that belongs to another user', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        email: 'me@mod.gov.et',
+        phone: '+251911000000',
+        isActive: true,
+      });
+      prisma.user.findFirst.mockResolvedValue({ id: 'user-other', email: 'taken@mod.gov.et' });
+
+      await expect(
+        service.updateProfile('user-1', { email: 'taken@mod.gov.et' }),
+      ).rejects.toMatchObject({ response: { code: 'USERS_EMAIL_EXISTS' } });
       expect(prisma.user.update).not.toHaveBeenCalled();
     });
   });

@@ -1,5 +1,16 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SystemRole } from '@prisma/client';
+
+export class UnitSummaryDto {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiProperty()
+  code: string;
+}
 
 export class AuthenticatedUserDto {
   @ApiProperty()
@@ -25,6 +36,9 @@ export class AuthenticatedUserDto {
 
   @ApiProperty({ nullable: true })
   unitId: string | null;
+
+  @ApiPropertyOptional({ type: UnitSummaryDto, nullable: true })
+  unit?: UnitSummaryDto | null;
 
   @ApiProperty({ type: [String] })
   permissions: string[];
