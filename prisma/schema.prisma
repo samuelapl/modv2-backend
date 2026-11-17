@@ -1,0 +1,612 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// 1. IDENTITY & RBAC (12 Official MoD Roles)
+// -------------------------------------------------------------
+
+enum SystemRole {
+  STAFF_DRIVER // 1. Soldier / Civilian MoD Staff
+  UNIT_COORDINATOR // 2. Unit Transport Clerk / Sponsor
+  INSTRUCTOR // 3. Driving Instructor
+  TRAINING_ADMIN // 4. Academy Training Manager
+  EXAMINER // 5. Independent Driving Assessor
+  MEDICAL_REVIEWER // 6. Military Doctor / Clinic Officer
+  CENTRAL_LICENSING_ADMIN // 7. Central HQ Screener (The Maker)
+  APPROVING_AUTHORITY // 8. Senior Commander (The Checker)
+  CREDENTIAL_ISSUER // 9. Card Printer & QR Dispatcher
+  VERIFICATION_OFFICER // 10. Gate Guard / Military Police
+  AUDITOR // 11. Inspector General / Compliance Officer
+  SYSTEM_ADMIN // 12. Technical Admin (IT Directorate)
+}
+
+enum PersonnelStatus {
+  ACTIVE
+  ON_LEAVE
+  TRANSFERRED
+  SUSPENDED
+  SEPARATED
+  RETIRED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+model User {
+  id                String              @id @default(uuid())
+  email             String?             @unique
+  serviceNumber     String              @unique // MoD Military/Staff ID (e.g., MOD-88219)
+  fullName          String?
+  rank              String?
+  phone             String?
+  passwordHash      String
+  roles             SystemRole[]
+  customPermissions String[]            @default([]) // Optional delegated user-level permissions
+  unitId            String?
+  unit              OrganizationalUnit? @relation(fields: [unitId], references: [id])
+  driverProfile     DriverProfile?
+  mfaEnabled        Boolean             @default(false)
+  mfaSecret         String?
+  isActive          Boolean             @default(true)
+  preferredLocale   String              @default("en") // Interface language: "en" | "am"
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  // Auditing & Workflow Relations
+  examinationsGiven      ExaminationRecord[]    @relation("ExaminerRelation")
+  approvalsGiven         ApplicationApproval[]
+  issuedCredentials      IssuedCredential[]     @relation("IssuerRelation")
+  suspensionsImposed     SuspensionRecord[]     @relation("SuspensionOfficer")
+  auditActions           AuditLog[]
+  trainingBatchesCreated TrainingBatch[]        @relation("BatchCreator")
+  credentialsRevoked     IssuedCredential[]     @relation("CredentialRevoker")
+  credentialsPrinted     IssuedCredential[]     @relation("CredentialPrinter")
+  suspensionsClosed      SuspensionRecord[]     @relation("SuspensionCloser")
+  trainingSessionsLed    TrainingBatchSession[] @relation("BatchInstructor")
+  notifications          Notification[]
+
+  @@index([serviceNumber])
+}
+
+model RolePermission {
+  id          String     @id @default(uuid())
+  role        SystemRole @unique
+  displayName String
+  description String?
+  permissions String[] // Dynamic list of Permission enum values assigned to this role
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model OrganizationalUnit {
+  id           String               @id @default(uuid())
+  code         String               @unique // e.g. "LOG-CORPS"
+  name         String // e.g. "Central Logistics & Transport Directorate"
+  parentUnitId String?
+  parentUnit   OrganizationalUnit?  @relation("UnitHierarchy", fields: [parentUnitId], references: [id])
+  subUnits     OrganizationalUnit[] @relation("UnitHierarchy")
+  users        User[]
+  drivers      DriverProfile[]
+  createdAt    DateTime             @default(now())
+}
+
+// -------------------------------------------------------------
+// 2. DRIVER PROFILE & NATIONAL LICENSE (PREREQUISITE)
+// -------------------------------------------------------------
+
+model DriverProfile {
+  id                    String             @id @default(uuid())
+  userId                String             @unique
+  user                  User               @relation(fields: [userId], references: [id])
+  serviceNumber         String             @unique
+  fullName              String
+  rank                  String?
+  gender                Gender?
+  nationalIdNumber      String?            @unique
+  dateOfBirth           DateTime
+  bloodGroup            String?
+  photoUrl              String? // Object storage key
+  contactPhone          String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  unitId                String
+  unit                  OrganizationalUnit @relation(fields: [unitId], references: [id])
+  personnelStatus       PersonnelStatus    @default(ACTIVE)
+  identityVerifiedAt    DateTime?
+  identityVerifiedBy    String?
+
+  nationalLicense   NationalLicense?
+  applications      Application[]
+  trainingRecords   TrainingEnrollment[]
+  examRecords       ExaminationRecord[]
+  medicalReviews    MedicalFitnessReview[]
+  issuedCredentials IssuedCredential[]
+  incidents         IncidentReport[]
+  suspensions       SuspensionRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serviceNumber])
+  @@index([fullName])
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  VERIFIED
+  REJECTED
+  EXPIRED
+}
+
+model NationalLicense {
+  id                  String             @id @default(uuid())
+  driverProfileId     String             @unique
+  driverProfile       DriverProfile      @relation(fields: [driverProfileId], references: [id])
+  licenseNumber       String             @unique
+  issuingAuthority    String // e.g. "Federal Transport Authority"
+  categories          String[] // e.g. ["Category 1", "Category 2"]
+  issuedDate          DateTime
+  expiryDate          DateTime
+  documentEvidenceUrl String? // MinIO path to scanned license
+  verificationStatus  VerificationStatus @default(UNVERIFIED)
+  verifiedAt          DateTime?
+  verifiedByUserId    String?
+  verificationNotes   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// -------------------------------------------------------------
+// 3. VEHICLE CATEGORIES & ENTITLEMENTS
+// -------------------------------------------------------------
+
+model VehicleCategory {
+  id                      String            @id @default(uuid())
+  code                    String            @unique // e.g. "CAT-LV", "CAT-HV", "CAT-SP"
+  name                    String // e.g. "Heavy Transport Vehicle"
+  description             String?
+  minAgeRequired          Int               @default(18)
+  prerequisiteCatId       String?
+  prerequisite            VehicleCategory?  @relation("Prerequisites", fields: [prerequisiteCatId], references: [id])
+  subsequentCats          VehicleCategory[] @relation("Prerequisites")
+  requiresNationalLicense Boolean           @default(false)
+  requiresMedical         Boolean           @default(true)
+  validityYears           Int               @default(3)
+  isActive                Boolean           @default(true)
+
+  applications    ApplicationItem[]
+  credentialItems CredentialCategoryItem[]
+}
+
+// -------------------------------------------------------------
+// 4. APPLICATION & MAKER-CHECKER APPROVAL WORKFLOW
+// -------------------------------------------------------------
+
+enum ApplicationType {
+  NEW_AUTHORIZATION
+  ADDITIONAL_CATEGORY
+  RENEWAL
+  REPLACEMENT
+  REINSTATEMENT
+  PRE_TRAINED // Already-trained driver holding an existing (pre-system) MoD permit
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  SCREENING
+  TRAINING_PENDING
+  EXAM_PENDING
+  MEDICAL_PENDING
+  READY_FOR_APPROVAL
+  APPROVED
+  REJECTED
+  RETURNED_FOR_CORRECTION
+}
+
+model Application {
+  id                String            @id @default(uuid())
+  applicationNumber String            @unique // e.g. "APP-2026-00042"
+  driverProfileId   String
+  driverProfile     DriverProfile     @relation(fields: [driverProfileId], references: [id])
+  type              ApplicationType
+  status            ApplicationStatus @default(DRAFT)
+  currentStage      String?
+  rejectionReason   String?
+
+  requestedCategories ApplicationItem[]
+  approvals           ApplicationApproval[]
+  trainingEnrollments TrainingEnrollment[]
+  examRecords         ExaminationRecord[]
+  medicalReviews      MedicalFitnessReview[]
+  priorPermit         PriorPermit?
+
+  // REPLACEMENT: why the card is replaced and which permit it copies.
+  // ADDITIONAL_CATEGORY: the permit the new categories are added to.
+  replacementReason    ReplacementReason?
+  replacesCredentialId String?
+  replacesCredential   IssuedCredential?  @relation("ReplacedCredential", fields: [replacesCredentialId], references: [id])
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum ReplacementReason {
+  LOST
+  STOLEN
+  DAMAGED
+}
+
+model ApplicationItem {
+  id            String          @id @default(uuid())
+  applicationId String
+  application   Application     @relation(fields: [applicationId], references: [id])
+  categoryId    String
+  category      VehicleCategory @relation(fields: [categoryId], references: [id])
+}
+
+// Existing (pre-system) permit evidence for a PRE_TRAINED application.
+// The credential issued from that application keeps these original dates.
+model PriorPermit {
+  id                String      @id @default(uuid())
+  applicationId     String      @unique
+  application       Application @relation(fields: [applicationId], references: [id])
+  permitNumber      String // Unique among non-rejected applications (enforced in app logic)
+  issueDate         DateTime
+  expiryDate        DateTime
+  trainingReference String?
+  documentUrl       String? // Object storage key (certificates bucket) of the scanned permit
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([permitNumber])
+}
+
+enum ApprovalAction {
+  RECOMMENDED
+  APPROVED
+  REJECTED
+  RETURNED
+}
+
+model ApplicationApproval {
+  id            String         @id @default(uuid())
+  applicationId String
+  application   Application    @relation(fields: [applicationId], references: [id])
+  officerUserId String
+  officer       User           @relation(fields: [officerUserId], references: [id])
+  action        ApprovalAction
+  comments      String?
+  decisionDate  DateTime       @default(now())
+
+  // Maker-Checker: Enforce approver != creator in business logic
+  @@index([applicationId, officerUserId])
+}
+
+// -------------------------------------------------------------
+// 5. TRAINING & EXAMINATIONS
+// -------------------------------------------------------------
+
+enum CourseStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+model TrainingCourse {
+  id            String   @id @default(uuid())
+  courseCode    String   @unique // e.g. "TRN-HV-01"
+  title         String
+  categoryCodes String[] // Vehicle categories this course qualifies a driver for (≥1)
+  durationHours Int
+  durationDays  Int      @default(30) // Calendar days a batch session for this course runs
+  syllabus      String?
+
+  enrollments   TrainingEnrollment[]
+  batchSessions TrainingBatchSession[]
+}
+
+// A training intake (BATCH-001, BATCH-002 ...). Holds one session per vehicle category.
+model TrainingBatch {
+  id          String                 @id @default(uuid())
+  batchCode   String                 @unique
+  notes       String?
+  createdById String
+  createdBy   User                   @relation("BatchCreator", fields: [createdById], references: [id])
+  sessions    TrainingBatchSession[]
+
+  createdAt DateTime @default(now())
+}
+
+// One category's cohort within a batch: course, practical trainer and schedule.
+model TrainingBatchSession {
+  id               String               @id @default(uuid())
+  batchId          String
+  batch            TrainingBatch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  courseId         String
+  course           TrainingCourse       @relation(fields: [courseId], references: [id])
+  categoryCode     String
+  instructorUserId String?
+  instructor       User?                @relation("BatchInstructor", fields: [instructorUserId], references: [id])
+  startDate        DateTime
+  endDate          DateTime
+  enrollments      TrainingEnrollment[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([batchId, categoryCode])
+}
+
+model TrainingEnrollment {
+  id              String                @id @default(uuid())
+  driverProfileId String
+  driverProfile   DriverProfile         @relation(fields: [driverProfileId], references: [id])
+  applicationId   String?
+  application     Application?          @relation(fields: [applicationId], references: [id])
+  courseId        String
+  course          TrainingCourse        @relation(fields: [courseId], references: [id])
+  categoryCode    String // The category this enrollment trains for (one of course.categoryCodes)
+  instructorId    String?
+  batchSessionId  String?
+  batchSession    TrainingBatchSession? @relation(fields: [batchSessionId], references: [id])
+  hoursAttended   Int                   @default(0)
+  status          CourseStatus          @default(IN_PROGRESS)
+  completionDate  DateTime?
+  certificateUrl  String? // MinIO link
+  notes           String?
+
+  createdAt DateTime @default(now())
+}
+
+enum ExamType {
+  THEORETICAL
+  PRACTICAL
+}
+
+enum ExamOutcome {
+  PASS
+  FAIL
+  INCOMPLETE
+}
+
+model ExaminationRecord {
+  id              String        @id @default(uuid())
+  driverProfileId String
+  driverProfile   DriverProfile @relation(fields: [driverProfileId], references: [id])
+  applicationId   String?
+  application     Application?  @relation(fields: [applicationId], references: [id])
+  examType        ExamType
+  categoryCode    String
+  scorePercent    Float?
+  outcome         ExamOutcome
+  examinerUserId  String
+  examiner        User          @relation("ExaminerRelation", fields: [examinerUserId], references: [id])
+  isLocked        Boolean       @default(true) // Locked against silent tampering
+  examDate        DateTime      @default(now())
+  evidenceUrl     String? // MinIO link to scanned test sheet
+  notes           String?
+}
+
+// -------------------------------------------------------------
+// 6. MEDICAL FITNESS REVIEW (PRIVACY / DATA MINIMIZATION)
+// -------------------------------------------------------------
+
+enum MedicalFitnessOutcome {
+  FIT
+  FIT_WITH_RESTRICTIONS
+  TEMPORARILY_UNFIT
+  UNFIT
+}
+
+model MedicalFitnessReview {
+  id                      String                @id @default(uuid())
+  driverProfileId         String
+  driverProfile           DriverProfile         @relation(fields: [driverProfileId], references: [id])
+  applicationId           String?
+  application             Application?          @relation(fields: [applicationId], references: [id])
+  medicalFacility         String // Military Hospital / Base Clinic
+  reviewerBadgeNumber     String
+  outcome                 MedicalFitnessOutcome
+  operationalRestrictions String[] // e.g. ["CORRECTIVE_LENSES", "DAYTIME_ONLY"]
+  assessmentDate          DateTime
+  reviewDueDate           DateTime // Expiration of medical clearance
+  documentProofUrl        String? // MinIO path to fitness certificate
+  createdAt               DateTime              @default(now())
+
+  // Note: Strictly NO diagnosis notes stored in IDLMS!
+}
+
+// -------------------------------------------------------------
+// 7. ISSUED CREDENTIAL & DIGITAL QR
+// -------------------------------------------------------------
+
+enum CredentialStatus {
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+  REVOKED
+  SUPERSEDED
+}
+
+model IssuedCredential {
+  id                 String           @id @default(uuid())
+  credentialNumber   String           @unique // e.g. "MOD-AUTH-2026-0042"
+  driverProfileId    String
+  driverProfile      DriverProfile    @relation(fields: [driverProfileId], references: [id])
+  serialNumber       String           @unique // Physical card serial or digital token ID
+  issueDate          DateTime         @default(now())
+  expiryDate         DateTime
+  status             CredentialStatus @default(ACTIVE)
+  qrHashSignature    String // Signed cryptographic payload
+  issuerUserId       String
+  issuer             User             @relation("IssuerRelation", fields: [issuerUserId], references: [id])
+  activeRestrictions String[] // e.g. ["CORRECTIVE_LENSES"]
+
+  // Permanent revocation (set only when status = REVOKED)
+  revokedAt            DateTime?
+  revokedById          String?
+  revokedBy            User?     @relation("CredentialRevoker", fields: [revokedById], references: [id])
+  revocationLegalBasis String?
+  revocationReason     String?
+
+  // Physical card print tracking (single-print policy with audit trail)
+  printCount           Int       @default(0)
+  printedAt            DateTime?
+  printedById          String?
+  printedBy            User?     @relation("CredentialPrinter", fields: [printedById], references: [id])
+
+  categories  CredentialCategoryItem[]
+  suspensions SuspensionRecord[]
+
+  replacementApplications Application[] @relation("ReplacedCredential")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([credentialNumber])
+  @@index([qrHashSignature])
+}
+
+model CredentialCategoryItem {
+  id              String           @id @default(uuid())
+  credentialId    String
+  credential      IssuedCredential @relation(fields: [credentialId], references: [id])
+  categoryId      String
+  category        VehicleCategory  @relation(fields: [categoryId], references: [id])
+  endorsementDate DateTime         @default(now())
+}
+
+// -------------------------------------------------------------
+// 8. SAFETY, INCIDENTS & SUSPENSIONS
+// -------------------------------------------------------------
+
+enum IncidentSeverity {
+  MINOR
+  MODERATE
+  SEVERE
+  CRITICAL
+}
+
+enum InvestigationStatus {
+  UNDER_INVESTIGATION
+  SUBSTANTIATED
+  DISMISSED
+  CLOSED
+}
+
+model IncidentReport {
+  id                String              @id @default(uuid())
+  reportNumber      String              @unique // e.g. "INC-2026-0012"
+  driverProfileId   String
+  driverProfile     DriverProfile       @relation(fields: [driverProfileId], references: [id])
+  incidentDate      DateTime
+  location          String? // Generalized area (NO secret tactical coordinates)
+  severity          IncidentSeverity
+  status            InvestigationStatus @default(UNDER_INVESTIGATION)
+  description       String
+  correctiveAction  String? // e.g. "Remedial Convoy Training Required"
+  remedialCompleted Boolean             @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SuspensionRecord {
+  id              String            @id @default(uuid())
+  driverProfileId String
+  driverProfile   DriverProfile     @relation(fields: [driverProfileId], references: [id])
+  credentialId    String?
+  credential      IssuedCredential? @relation(fields: [credentialId], references: [id])
+  legalBasis      String // Regulation reference or disciplinary ruling
+  reason          String
+  startDate       DateTime          @default(now())
+  reviewDate      DateTime?
+  reinstatedAt    DateTime?
+  revokedAt       DateTime? // Suspension ended by permanent permit revocation
+  closedById      String?
+  closedBy        User?             @relation("SuspensionCloser", fields: [closedById], references: [id])
+  authorizedById  String
+  authorizedBy    User              @relation("SuspensionOfficer", fields: [authorizedById], references: [id])
+  isActive        Boolean           @default(true)
+
+  createdAt DateTime @default(now())
+}
+
+// -------------------------------------------------------------
+// 9. AUDIT TRAIL & SYSTEM LOGGING
+// -------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String // e.g. "APPROVE_APPLICATION", "ISSUE_CREDENTIAL", "SUSPEND_DRIVER"
+  entityType String // e.g. "IssuedCredential", "MedicalFitnessReview"
+  entityId   String
+  ipAddress  String?
+  userAgent  String?
+  oldValue   Json? // Before snapshot
+  newValue   Json? // After snapshot
+  timestamp  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([timestamp])
+}
+
+// -------------------------------------------------------------
+// 10. NOTIFICATIONS & MULTI-CHANNEL DISPATCH
+// -------------------------------------------------------------
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+enum NotificationCategory {
+  APPLICATION
+  CREDENTIAL
+  SAFETY
+  EXPIRY
+  EXAMINATION
+  TRAINING
+  MEDICAL
+  SYSTEM
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+  ARCHIVED
+}
+
+model Notification {
+  id        String               @id @default(uuid())
+  userId    String
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  category  NotificationCategory
+  channel   NotificationChannel  @default(IN_APP)
+  status    NotificationStatus   @default(UNREAD)
+  link      String? // Optional deep-link URL (e.g. "/applications/app-uuid")
+  metadata  Json? // Context data (e.g. applicationNumber, permitNumber)
+  readAt    DateTime?
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@index([category])
+}

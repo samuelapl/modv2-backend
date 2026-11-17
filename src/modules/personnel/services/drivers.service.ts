@@ -1,0 +1,902 @@
+import { Injectable } from '@nestjs/common';
+import {
+  AppBadRequestException,
+  AppConflictException,
+  AppForbiddenException,
+  AppNotFoundException,
+} from '../../../common/errors';
+import {
+  ApplicationStatus,
+  CredentialStatus,
+  SystemRole,
+} from '@prisma/client';
+import * as bcrypt from 'bcryptjs';
+import { PrismaService } from '../../../prisma/prisma.service';
+import { PaginatedResult } from '../../../common/dto/paginated-result.dto';
+import { Permission } from '../../../common/enums/permissions.enum';
+import { CreateDriverDto } from '../dto/create-driver.dto';
+import { BulkCreateDriversDto } from '../dto/bulk-create-drivers.dto';
+import { UpdateDriverDto } from '../dto/update-driver.dto';
+import { QueryDriversDto } from '../dto/query-drivers.dto';
+import { OPEN_APPLICATION_STATUSES } from '../../applications/helpers/application-state.helper';
+import {
+  ResolvedPriorPermit,
+  createPreTrainedApplicationInTx,
+  generateApplicationNumber,
+  isApplicationNumberCollision,
+  loadPriorPermitLookup,
+  resolvePriorPermit,
+} from '../../applications/helpers/prior-permit.helper';
+
+export interface RequestUserContext {
+  id: string;
+  serviceNumber: string;
+  unitId: string | null;
+  resolvedPermissions?: string[];
+}
+
+function calculateAge(dob: Date): number {
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const m = today.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) {
+    age--;
+  }
+  return age;
+}
+
+@Injectable()
+export class DriversService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async findAll(query: QueryDriversDto, user: RequestUserContext) {
+    const perms = new Set(user.resolvedPermissions || []);
+    const page = query.page || 1;
+    const limit = query.limit || 10;
+    const skip = (page - 1) * limit;
+
+    const where: any = {};
+
+    if (perms.has(Permission.DRIVERS_VIEW_ALL)) {
+      if (query.unitId) where.unitId = query.unitId;
+    } else if (perms.has(Permission.DRIVERS_VIEW_UNIT)) {
+      if (!user.unitId) {
+        return new PaginatedResult([], 0, page, limit);
+      }
+      where.unitId = user.unitId;
+    } else {
+      where.userId = user.id;
+    }
+
+    if (query.search) {
+      where.OR = [
+        { serviceNumber: { contains: query.search, mode: 'insensitive' } },
+        { fullName: { contains: query.search, mode: 'insensitive' } },
+        { rank: { contains: query.search, mode: 'insensitive' } },
+        { nationalIdNumber: { contains: query.search, mode: 'insensitive' } },
+        { contactPhone: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+    if (query.personnelStatus) {
+      where.personnelStatus = query.personnelStatus;
+    }
+    if (query.verifiedOnly) {
+      where.identityVerifiedAt = { not: null };
+    }
+
+    // ---- Driving authorization class filters ----
+    const classCode = query.categoryCode?.trim().toUpperCase();
+    const now = new Date();
+    const classScope = classCode
+      ? { categories: { some: { category: { code: classCode } } } }
+      : {};
+    const validPermit = {
+      status: CredentialStatus.ACTIVE,
+      expiryDate: { gt: now },
+      ...classScope,
+    };
+    const suspendedPermit = {
+      status: CredentialStatus.SUSPENDED,
+      expiryDate: { gt: now },
+      ...classScope,
+    };
+    const openApplication = {
+      ...(classCode
+        ? { requestedCategories: { some: { category: { code: classCode } } } }
+        : {}),
+      OR: [
+        { status: { in: OPEN_APPLICATION_STATUSES } },
+        {
+          status: ApplicationStatus.APPROVED,
+          NOT: { currentStage: { startsWith: 'Credential Issued' } },
+        },
+      ],
+    };
+    const authorization =
+      query.authorization ?? (classCode ? 'AUTHORIZED' : undefined);
+    if (authorization === 'AUTHORIZED') {
+      where.issuedCredentials = { some: validPermit };
+    } else if (authorization === 'SUSPENDED') {
+      where.issuedCredentials = { some: suspendedPermit };
+    } else if (authorization === 'IN_PROGRESS') {
+      where.applications = { some: openApplication };
+    } else if (authorization === 'NONE') {
+      where.issuedCredentials = {
+        none: { OR: [validPermit, suspendedPermit] },
+      };
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.driverProfile.findMany({
+        where,
+        include: {
+          unit: { select: { id: true, code: true, name: true } },
+          user: { select: { id: true, email: true, phone: true } },
+          nationalLicense: {
+            select: {
+              id: true,
+              licenseNumber: true,
+              verificationStatus: true,
+              expiryDate: true,
+            },
+          },
+          issuedCredentials: {
+            where: {
+              status: {
+                in: [CredentialStatus.ACTIVE, CredentialStatus.SUSPENDED],
+              },
+              expiryDate: { gt: now },
+            },
+            orderBy: { issueDate: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              credentialNumber: true,
+              status: true,
+              expiryDate: true,
+              categories: {
+                select: { category: { select: { code: true, name: true } } },
+              },
+            },
+          },
+          applications: {
+            where: {
+              OR: [
+                { status: { in: OPEN_APPLICATION_STATUSES } },
+                {
+                  status: ApplicationStatus.APPROVED,
+                  NOT: { currentStage: { startsWith: 'Credential Issued' } },
+                },
+              ],
+            },
+            orderBy: { updatedAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              applicationNumber: true,
+              status: true,
+              requestedCategories: {
+                select: { category: { select: { code: true } } },
+              },
+            },
+          },
+        },
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.driverProfile.count({ where }),
+    ]);
+
+    return new PaginatedResult(items, total, page, limit);
+  }
+
+  async findOne(id: string, user: RequestUserContext) {
+    const perms = new Set(user.resolvedPermissions || []);
+    const driver = await this.prisma.driverProfile.findUnique({
+      where: { id },
+      include: {
+        unit: { select: { id: true, code: true, name: true } },
+        user: { select: { id: true, email: true, phone: true } },
+        nationalLicense: true,
+      },
+    });
+
+    if (!driver) {
+      throw new AppNotFoundException(
+        'DRIVER_NOT_FOUND',
+        {},
+        'Driver profile not found.',
+      );
+    }
+
+    const allowed =
+      perms.has(Permission.DRIVERS_VIEW_ALL) ||
+      (perms.has(Permission.DRIVERS_VIEW_UNIT) &&
+        driver.unitId === user.unitId) ||
+      (perms.has(Permission.DRIVERS_VIEW_OWN) && driver.userId === user.id);
+
+    if (!allowed) {
+      throw new AppForbiddenException(
+        'DRIVER_OUTSIDE_UNIT_SCOPE',
+        {},
+        'Access denied: Driver outside your unit scope.',
+      );
+    }
+
+    return driver;
+  }
+
+  async create(dto: CreateDriverDto, user: RequestUserContext) {
+    const perms = new Set(user.resolvedPermissions || []);
+    const normalizedService = dto.serviceNumber.trim().toUpperCase();
+    const dob = new Date(dto.dateOfBirth);
+
+    if (Number.isNaN(dob.getTime()) || calculateAge(dob) < 18) {
+      throw new AppBadRequestException(
+        'DRIVER_UNDERAGE',
+        {},
+        'Driver must be at least 18 years old.',
+      );
+    }
+
+    if (
+      !perms.has(Permission.DRIVERS_VIEW_ALL) &&
+      user.unitId &&
+      dto.unitId !== user.unitId
+    ) {
+      throw new AppForbiddenException(
+        'UNIT_COORDINATOR_OWN_UNIT_ONLY',
+        {},
+        'Unit Coordinators can only register drivers within their assigned unit.',
+      );
+    }
+
+    const unit = await this.prisma.organizationalUnit.findUnique({
+      where: { id: dto.unitId },
+    });
+    if (!unit) {
+      throw new AppBadRequestException(
+        'SELECTED_UNIT_NOT_FOUND',
+        {},
+        'Selected organizational unit does not exist.',
+      );
+    }
+
+    const existingProfile = await this.prisma.driverProfile.findUnique({
+      where: { serviceNumber: normalizedService },
+    });
+    if (existingProfile) {
+      throw new AppConflictException(
+        'DRIVER_SERVICE_NUMBER_EXISTS',
+        { serviceNumber: normalizedService },
+        `Driver profile already exists for service number ${normalizedService}.`,
+      );
+    }
+
+    const normalizedNationalId =
+      dto.nationalIdNumber?.trim().toUpperCase() || null;
+    if (normalizedNationalId) {
+      const existingByNationalId = await this.prisma.driverProfile.findUnique({
+        where: { nationalIdNumber: normalizedNationalId },
+      });
+      if (existingByNationalId) {
+        throw new AppConflictException(
+          'DRIVER_NATIONAL_ID_EXISTS',
+          { nationalId: normalizedNationalId },
+          `Driver profile already exists for National / Fayda ID ${normalizedNationalId}.`,
+        );
+      }
+    }
+
+    const normalizedEmail = dto.email?.trim().toLowerCase() || null;
+    if (normalizedEmail) {
+      const existingByEmail = await this.prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        select: { serviceNumber: true },
+      });
+      if (
+        existingByEmail &&
+        existingByEmail.serviceNumber !== normalizedService
+      ) {
+        throw new AppConflictException(
+          'USERS_EMAIL_EXISTS',
+          { email: normalizedEmail },
+          `User account already exists with email ${normalizedEmail}.`,
+        );
+      }
+    }
+
+    let prior: ResolvedPriorPermit | null = null;
+    if (dto.priorPermit) {
+      this.assertCanRecordPriorPermits(perms);
+      const lookup = await loadPriorPermitLookup(this.prisma, [
+        dto.priorPermit,
+      ]);
+      prior = resolvePriorPermit(dto.priorPermit, dob, lookup);
+    }
+
+    const passwordHash = await bcrypt.hash(
+      dto.initialPassword || 'MoD@2026!',
+      10,
+    );
+
+    return this.runDriverTransaction(prior, (tx, attempt) =>
+      this.createDriverRecordInTx(
+        tx,
+        dto,
+        normalizedService,
+        normalizedNationalId,
+        dob,
+        passwordHash,
+        prior ? { prior, createdById: user.id, attempt } : null,
+      ),
+    );
+  }
+
+  async bulkCreate(dto: BulkCreateDriversDto, user: RequestUserContext) {
+    const perms = new Set(user.resolvedPermissions || []);
+    const canAnyUnit = perms.has(Permission.DRIVERS_VIEW_ALL);
+
+    for (const item of dto.drivers) {
+      if (!canAnyUnit && user.unitId && item.unitId !== user.unitId) {
+        throw new AppForbiddenException(
+          'UNIT_COORDINATOR_OWN_UNIT_ONLY',
+          {},
+          'Unit Coordinators can only register drivers within their assigned unit.',
+        );
+      }
+    }
+
+    const priorInputs = dto.drivers
+      .map((d) => d.priorPermit)
+      .filter((p): p is NonNullable<typeof p> => Boolean(p));
+    if (priorInputs.length > 0) {
+      this.assertCanRecordPriorPermits(perms);
+    }
+    const priorLookup =
+      priorInputs.length > 0
+        ? await loadPriorPermitLookup(this.prisma, priorInputs)
+        : null;
+
+    const uniqueUnitIds = Array.from(new Set(dto.drivers.map((d) => d.unitId)));
+    const normalizedServices = dto.drivers.map((d) =>
+      d.serviceNumber.trim().toUpperCase(),
+    );
+    const normalizedNationalIds = dto.drivers
+      .map((d) => d.nationalIdNumber?.trim().toUpperCase())
+      .filter((v): v is string => Boolean(v));
+    const normalizedEmails = dto.drivers
+      .map((d) => d.email?.trim().toLowerCase())
+      .filter((v): v is string => Boolean(v));
+
+    const [validUnits, existingByService, existingByNationalId, existingByEmail] =
+      await Promise.all([
+        this.prisma.organizationalUnit.findMany({
+          where: { id: { in: uniqueUnitIds } },
+          select: { id: true },
+        }),
+        this.prisma.driverProfile.findMany({
+          where: { serviceNumber: { in: normalizedServices } },
+          select: { serviceNumber: true },
+        }),
+        normalizedNationalIds.length > 0
+          ? this.prisma.driverProfile.findMany({
+              where: { nationalIdNumber: { in: normalizedNationalIds } },
+              select: { nationalIdNumber: true },
+            })
+          : Promise.resolve([]),
+        normalizedEmails.length > 0
+          ? this.prisma.user.findMany({
+              where: { email: { in: normalizedEmails } },
+              select: { email: true, serviceNumber: true },
+            })
+          : Promise.resolve([]),
+      ]);
+
+    const validUnitSet = new Set(validUnits.map((u) => u.id));
+    const dbServiceSet = new Set(existingByService.map((d) => d.serviceNumber));
+    const dbNationalIdSet = new Set(
+      existingByNationalId
+        .map((d) => d.nationalIdNumber)
+        .filter((v): v is string => Boolean(v)),
+    );
+    const dbEmailMap = new Map<string, string>();
+    for (const u of existingByEmail) {
+      if (u.email) dbEmailMap.set(u.email, u.serviceNumber);
+    }
+    const batchServiceSet = new Set<string>();
+    const batchNationalIdSet = new Set<string>();
+    const batchEmailSet = new Set<string>();
+    const passwordHashCache = new Map<string, string>();
+
+    const results: Array<{
+      rowIndex: number;
+      serviceNumber: string;
+      fullName: string;
+      status: 'CREATED' | 'FAILED';
+      error?: string;
+      driver?: any;
+      application?: { id: string; applicationNumber: string; status: string };
+    }> = [];
+
+    for (let i = 0; i < dto.drivers.length; i++) {
+      const item = dto.drivers[i];
+      const normalizedService = item.serviceNumber.trim().toUpperCase();
+      const normalizedNationalId =
+        item.nationalIdNumber?.trim().toUpperCase() || null;
+      const normalizedEmail = item.email?.trim().toLowerCase() || null;
+
+      try {
+        const dob = new Date(item.dateOfBirth);
+        if (Number.isNaN(dob.getTime()) || calculateAge(dob) < 18) {
+          throw new AppBadRequestException(
+            'DRIVER_UNDERAGE',
+            {},
+            'Driver must be at least 18 years old.',
+          );
+        }
+
+        if (!validUnitSet.has(item.unitId)) {
+          throw new AppBadRequestException(
+            'SELECTED_UNIT_NOT_FOUND',
+            {},
+            'Selected organizational unit does not exist.',
+          );
+        }
+
+        if (
+          dbServiceSet.has(normalizedService) ||
+          batchServiceSet.has(normalizedService)
+        ) {
+          throw new AppConflictException(
+            'DRIVER_SERVICE_NUMBER_EXISTS',
+            { serviceNumber: normalizedService },
+            `Driver profile already exists for service number ${normalizedService}.`,
+          );
+        }
+
+        if (
+          normalizedNationalId &&
+          (dbNationalIdSet.has(normalizedNationalId) ||
+            batchNationalIdSet.has(normalizedNationalId))
+        ) {
+          throw new AppConflictException(
+            'DRIVER_NATIONAL_ID_EXISTS',
+            { nationalId: normalizedNationalId },
+            `Driver profile already exists for National / Fayda ID ${normalizedNationalId}.`,
+          );
+        }
+
+        if (normalizedEmail) {
+          const existingOwner = dbEmailMap.get(normalizedEmail);
+          if (
+            (existingOwner && existingOwner !== normalizedService) ||
+            batchEmailSet.has(normalizedEmail)
+          ) {
+            throw new AppConflictException(
+              'USERS_EMAIL_EXISTS',
+              { email: normalizedEmail },
+              `Email ${normalizedEmail} is already registered to another user.`,
+            );
+          }
+        }
+
+        const prior =
+          item.priorPermit && priorLookup
+            ? resolvePriorPermit(item.priorPermit, dob, priorLookup)
+            : null;
+
+        const rawPassword = item.initialPassword || 'MoD@2026!';
+        let passwordHash = passwordHashCache.get(rawPassword);
+        if (!passwordHash) {
+          passwordHash = await bcrypt.hash(rawPassword, 10);
+          passwordHashCache.set(rawPassword, passwordHash);
+        }
+
+        const created = await this.runDriverTransaction(prior, (tx, attempt) =>
+          this.createDriverRecordInTx(
+            tx,
+            item,
+            normalizedService,
+            normalizedNationalId,
+            dob,
+            passwordHash!,
+            prior ? { prior, createdById: user.id, attempt } : null,
+          ),
+        );
+
+        batchServiceSet.add(normalizedService);
+        if (prior && priorLookup) {
+          priorLookup.takenPermitNumbers.add(prior.permitNumber);
+        }
+        if (normalizedNationalId) {
+          batchNationalIdSet.add(normalizedNationalId);
+        }
+        if (normalizedEmail) {
+          batchEmailSet.add(normalizedEmail);
+        }
+
+        results.push({
+          rowIndex: i,
+          serviceNumber: normalizedService,
+          fullName: item.fullName.trim(),
+          status: 'CREATED',
+          driver: created,
+          application: created.preTrainedApplication ?? undefined,
+        });
+      } catch (err: any) {
+        results.push({
+          rowIndex: i,
+          serviceNumber: normalizedService,
+          fullName: item.fullName.trim(),
+          status: 'FAILED',
+          error: err?.message || 'Failed to register driver.',
+        });
+      }
+    }
+
+    const createdCount = results.filter((r) => r.status === 'CREATED').length;
+    return {
+      totalRequested: dto.drivers.length,
+      createdCount,
+      failedCount: dto.drivers.length - createdCount,
+      applicationsCreated: results.filter((r) => r.application).length,
+      results,
+    };
+  }
+
+  /** Pre-trained registration also opens an application, so it needs that right too. */
+  private assertCanRecordPriorPermits(perms: Set<string>) {
+    if (!perms.has(Permission.APPLICATIONS_CREATE)) {
+      throw new AppForbiddenException(
+        'PRIOR_PERMIT_REQUIRES_APPLICATION_PERMISSION',
+        {},
+        'Registering already-trained drivers requires permission to submit applications.',
+      );
+    }
+  }
+
+  /**
+   * Runs the driver-creation transaction, retrying only when a concurrent
+   * registration grabbed the same generated application number.
+   */
+  private async runDriverTransaction(
+    prior: ResolvedPriorPermit | null,
+    work: (tx: any, attempt: number) => Promise<any>,
+  ) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.prisma.$transaction((tx) => work(tx, attempt));
+      } catch (err) {
+        if (prior && attempt < 4 && isApplicationNumberCollision(err)) {
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  private async createDriverRecordInTx(
+    tx: any,
+    dto: CreateDriverDto,
+    normalizedService: string,
+    normalizedNationalId: string | null,
+    dob: Date,
+    passwordHash: string,
+    preTrained: {
+      prior: ResolvedPriorPermit;
+      createdById: string;
+      attempt: number;
+    } | null = null,
+  ) {
+    const normalizedEmail = dto.email?.trim().toLowerCase() || null;
+    let existingUser = await tx.user.findUnique({
+      where: { serviceNumber: normalizedService },
+    });
+
+    if (!existingUser) {
+      existingUser = await tx.user.create({
+        data: {
+          serviceNumber: normalizedService,
+          fullName: dto.fullName.trim(),
+          rank: dto.rank?.trim() || null,
+          email: normalizedEmail,
+          phone: dto.contactPhone?.trim() || null,
+          passwordHash,
+          roles: [SystemRole.STAFF_DRIVER],
+          unitId: dto.unitId,
+          isActive: true,
+        },
+      });
+    } else if (normalizedEmail && existingUser.email !== normalizedEmail) {
+      existingUser = await tx.user.update({
+        where: { id: existingUser.id },
+        data: { email: normalizedEmail },
+      });
+    }
+
+    const driver = await tx.driverProfile.create({
+      data: {
+        userId: existingUser.id,
+        serviceNumber: normalizedService,
+        fullName: dto.fullName.trim(),
+        rank: dto.rank?.trim() || null,
+        gender: dto.gender,
+        nationalIdNumber: normalizedNationalId,
+        dateOfBirth: dob,
+        bloodGroup: dto.bloodGroup,
+        photoUrl: dto.photoUrl,
+        contactPhone: dto.contactPhone?.trim() || null,
+        emergencyContactName: dto.emergencyContactName?.trim() || null,
+        emergencyContactPhone: dto.emergencyContactPhone?.trim() || null,
+        unitId: dto.unitId,
+        personnelStatus: dto.personnelStatus,
+      },
+      include: {
+        unit: { select: { id: true, code: true, name: true } },
+        user: { select: { id: true, email: true, phone: true } },
+      },
+    });
+
+    if (!preTrained) {
+      return driver;
+    }
+
+    const preTrainedApplication = await createPreTrainedApplicationInTx(tx, {
+      driverProfileId: driver.id,
+      createdById: preTrained.createdById,
+      prior: preTrained.prior,
+      applicationNumber: await generateApplicationNumber(
+        tx,
+        preTrained.attempt,
+      ),
+    });
+
+    return { ...driver, preTrainedApplication };
+  }
+
+  async update(id: string, dto: UpdateDriverDto) {
+    const existing = await this.prisma.driverProfile.findUnique({
+      where: { id },
+    });
+    if (!existing) {
+      throw new AppNotFoundException(
+        'DRIVER_NOT_FOUND',
+        {},
+        'Driver profile not found.',
+      );
+    }
+
+    const normalizedNationalId =
+      dto.nationalIdNumber !== undefined
+        ? dto.nationalIdNumber.trim().toUpperCase() || null
+        : undefined;
+
+    if (normalizedNationalId) {
+      const duplicate = await this.prisma.driverProfile.findUnique({
+        where: { nationalIdNumber: normalizedNationalId },
+        select: { id: true },
+      });
+      if (duplicate && duplicate.id !== id) {
+        throw new AppConflictException(
+          'DRIVER_NATIONAL_ID_EXISTS',
+          { nationalId: normalizedNationalId },
+          `Driver profile already exists for National / Fayda ID ${normalizedNationalId}.`,
+        );
+      }
+    }
+
+    const normalizedEmail =
+      dto.email !== undefined
+        ? dto.email.trim().toLowerCase() || null
+        : undefined;
+
+    if (normalizedEmail) {
+      const duplicateUser = await this.prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      });
+      if (duplicateUser && duplicateUser.id !== existing.userId) {
+        throw new AppConflictException(
+          'USERS_EMAIL_EXISTS',
+          { email: normalizedEmail },
+          `User account already exists with email ${normalizedEmail}.`,
+        );
+      }
+    }
+
+    if (normalizedEmail !== undefined && existing.userId) {
+      await this.prisma.user.update({
+        where: { id: existing.userId },
+        data: { email: normalizedEmail },
+      });
+    }
+
+    return this.prisma.driverProfile.update({
+      where: { id },
+      data: {
+        fullName: dto.fullName?.trim(),
+        rank: dto.rank !== undefined ? dto.rank.trim() || null : undefined,
+        gender: dto.gender,
+        nationalIdNumber: normalizedNationalId,
+        bloodGroup: dto.bloodGroup,
+        photoUrl: dto.photoUrl,
+        contactPhone:
+          dto.contactPhone !== undefined
+            ? dto.contactPhone.trim() || null
+            : undefined,
+        emergencyContactName:
+          dto.emergencyContactName !== undefined
+            ? dto.emergencyContactName.trim() || null
+            : undefined,
+        emergencyContactPhone:
+          dto.emergencyContactPhone !== undefined
+            ? dto.emergencyContactPhone.trim() || null
+            : undefined,
+        unitId: dto.unitId,
+        personnelStatus: dto.personnelStatus,
+      },
+      include: {
+        unit: { select: { id: true, code: true, name: true } },
+        user: { select: { id: true, email: true, phone: true } },
+      },
+    });
+  }
+
+  /**
+   * Stamps identity verification on many drivers at once. Each driver is
+   * checked individually; ineligible ones are reported rather than failing
+   * the whole batch:
+   *  - not found / outside the verifier's unit scope → FAILED
+   *  - the verifier's own profile (separation of duties) → FAILED
+   *  - already verified → SKIPPED (original stamp is kept)
+   */
+  async bulkVerifyIdentity(driverIds: string[], verifier: RequestUserContext) {
+    const ids = Array.from(new Set(driverIds));
+    const perms = new Set(verifier.resolvedPermissions || []);
+
+    const drivers = await this.prisma.driverProfile.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        serviceNumber: true,
+        fullName: true,
+        unitId: true,
+        userId: true,
+        identityVerifiedAt: true,
+      },
+    });
+    const byId = new Map(drivers.map((d) => [d.id, d]));
+
+    type Outcome = {
+      driverId: string;
+      serviceNumber?: string;
+      fullName?: string;
+      status: 'VERIFIED' | 'SKIPPED' | 'FAILED';
+      reason?: string;
+    };
+    const results: Outcome[] = [];
+    const eligible: string[] = [];
+
+    for (const id of ids) {
+      const d = byId.get(id);
+      if (!d) {
+        results.push({
+          driverId: id,
+          status: 'FAILED',
+          reason: 'Driver profile not found.',
+        });
+        continue;
+      }
+      const base = {
+        driverId: d.id,
+        serviceNumber: d.serviceNumber,
+        fullName: d.fullName,
+      };
+      const inScope =
+        perms.has(Permission.DRIVERS_VIEW_ALL) ||
+        (perms.has(Permission.DRIVERS_VIEW_UNIT) &&
+          d.unitId === verifier.unitId);
+      if (!inScope) {
+        results.push({
+          ...base,
+          status: 'FAILED',
+          reason: 'Driver is outside your unit scope.',
+        });
+      } else if (d.userId && d.userId === verifier.id) {
+        results.push({
+          ...base,
+          status: 'FAILED',
+          reason: 'You cannot verify your own identity.',
+        });
+      } else if (d.identityVerifiedAt) {
+        results.push({
+          ...base,
+          status: 'SKIPPED',
+          reason: 'Identity already verified.',
+        });
+      } else {
+        eligible.push(d.id);
+        results.push({ ...base, status: 'VERIFIED' });
+      }
+    }
+
+    if (eligible.length > 0) {
+      const now = new Date();
+      await this.prisma.$transaction(async (tx) => {
+        // Re-check identityVerifiedAt so a concurrent verification isn't overwritten.
+        const updated = await tx.driverProfile.updateMany({
+          where: { id: { in: eligible }, identityVerifiedAt: null },
+          data: {
+            identityVerifiedAt: now,
+            identityVerifiedBy: verifier.serviceNumber,
+          },
+        });
+        if (updated.count !== eligible.length) {
+          const stamped = await tx.driverProfile.findMany({
+            where: { id: { in: eligible }, identityVerifiedAt: now },
+            select: { id: true },
+          });
+          const stampedIds = new Set(stamped.map((s) => s.id));
+          for (const r of results) {
+            if (r.status === 'VERIFIED' && !stampedIds.has(r.driverId)) {
+              r.status = 'SKIPPED';
+              r.reason = 'Identity already verified.';
+            }
+          }
+        }
+
+        const verified = results.filter((r) => r.status === 'VERIFIED');
+        if (verified.length) {
+          await tx.auditLog.createMany({
+            data: verified.map((r) => ({
+              userId: verifier.id,
+              action: 'VERIFY_DRIVER_IDENTITY',
+              entityType: 'DriverProfile',
+              entityId: r.driverId,
+              newValue: {
+                serviceNumber: r.serviceNumber,
+                identityVerifiedAt: now.toISOString(),
+                identityVerifiedBy: verifier.serviceNumber,
+                via: 'BULK_VERIFY',
+              },
+            })),
+          });
+        }
+      });
+    }
+
+    return {
+      totalRequested: ids.length,
+      verifiedCount: results.filter((r) => r.status === 'VERIFIED').length,
+      skippedCount: results.filter((r) => r.status === 'SKIPPED').length,
+      failedCount: results.filter((r) => r.status === 'FAILED').length,
+      results,
+    };
+  }
+
+  async verifyIdentity(id: string, verifier: RequestUserContext) {
+    const existing = await this.prisma.driverProfile.findUnique({
+      where: { id },
+    });
+    if (!existing) {
+      throw new AppNotFoundException(
+        'DRIVER_NOT_FOUND',
+        {},
+        'Driver profile not found.',
+      );
+    }
+
+    return this.prisma.driverProfile.update({
+      where: { id },
+      data: {
+        identityVerifiedAt: new Date(),
+        identityVerifiedBy: verifier.serviceNumber,
+      },
+      include: {
+        unit: { select: { id: true, code: true, name: true } },
+      },
+    });
+  }
+}

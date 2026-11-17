@@ -1,0 +1,42 @@
+import { ApiProperty } from '@nestjs/swagger';
+import { SystemRole } from '@prisma/client';
+
+export class AuthenticatedUserDto {
+  @ApiProperty()
+  id: string;
+
+  @ApiProperty()
+  serviceNumber: string;
+
+  @ApiProperty({ nullable: true })
+  fullName: string | null;
+
+  @ApiProperty({ nullable: true })
+  rank: string | null;
+
+  @ApiProperty({ nullable: true })
+  phone: string | null;
+
+  @ApiProperty({ nullable: true })
+  email: string | null;
+
+  @ApiProperty({ enum: SystemRole, isArray: true })
+  roles: SystemRole[];
+
+  @ApiProperty({ nullable: true })
+  unitId: string | null;
+
+  @ApiProperty({ type: [String] })
+  permissions: string[];
+
+  @ApiProperty({ enum: ['en', 'am'], example: 'en' })
+  preferredLocale: string;
+}
+
+export class LoginResponseDto {
+  @ApiProperty()
+  accessToken: string;
+
+  @ApiProperty({ type: AuthenticatedUserDto })
+  user: AuthenticatedUserDto;
+}

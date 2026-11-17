@@ -1,0 +1,183 @@
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import {
+  ApplicationStatus,
+  MedicalFitnessOutcome,
+  PersonnelStatus,
+} from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
+import { Permission } from '../../common/enums/permissions.enum';
+import { MedicalService } from './medical.service';
+
+describe('MedicalService', () => {
+  let service: MedicalService;
+
+  const mockTx: any = {
+    medicalFitnessReview: { create: jest.fn() },
+    application: { update: jest.fn() },
+  };
+
+  const mockPrisma: any = {
+    driverProfile: { findUnique: jest.fn() },
+    application: { findUnique: jest.fn(), findMany: jest.fn(), count: jest.fn() },
+    medicalFitnessReview: { findMany: jest.fn(), count: jest.fn() },
+    $transaction: jest.fn((fn: (tx: any) => any) => fn(mockTx)),
+  };
+
+  const medicalOfficer = {
+    id: 'user-med-1',
+    serviceNumber: 'MOD-MED-001',
+    unitId: 'unit-1',
+    resolvedPermissions: [
+      Permission.MEDICAL_RECORD_FIT,
+      Permission.MEDICAL_VIEW_OUTCOME,
+    ],
+  };
+
+  const licensingAdmin = {
+    id: 'user-lic-1',
+    serviceNumber: 'MOD-LIC-001',
+    unitId: 'unit-1',
+    resolvedPermissions: [
+      Permission.MEDICAL_VIEW_OUTCOME,
+      Permission.APPLICATIONS_VIEW_ALL,
+    ],
+  };
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        MedicalService,
+        { provide: PrismaService, useValue: mockPrisma },
+      ],
+    }).compile();
+
+    service = module.get<MedicalService>(MedicalService);
+  });
+
+  it('blocks self-review with 403 Forbidden', async () => {
+    mockPrisma.driverProfile.findUnique.mockResolvedValue({
+      id: 'drv-1',
+      userId: 'user-med-1',
+      personnelStatus: PersonnelStatus.ACTIVE,
+    });
+
+    await expect(
+      service.recordReview(
+        {
+          driverProfileId: 'drv-1',
+          medicalFacility: 'Armed Forces Hospital',
+          reviewerBadgeNumber: 'MED-101',
+          outcome: MedicalFitnessOutcome.FIT,
+          operationalRestrictions: [],
+          assessmentDate: '2026-11-01',
+          reviewDueDate: '2029-11-01',
+        },
+        medicalOfficer,
+      ),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('requires at least one restriction for FIT_WITH_RESTRICTIONS', async () => {
+    mockPrisma.driverProfile.findUnique.mockResolvedValue({
+      id: 'drv-1',
+      userId: 'user-drv-1',
+      personnelStatus: PersonnelStatus.ACTIVE,
+    });
+
+    await expect(
+      service.recordReview(
+        {
+          driverProfileId: 'drv-1',
+          medicalFacility: 'Armed Forces Hospital',
+          reviewerBadgeNumber: 'MED-101',
+          outcome: MedicalFitnessOutcome.FIT_WITH_RESTRICTIONS,
+          operationalRestrictions: [],
+          assessmentDate: '2026-11-01',
+          reviewDueDate: '2029-11-01',
+        },
+        medicalOfficer,
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects reviewDueDate <= assessmentDate', async () => {
+    mockPrisma.driverProfile.findUnique.mockResolvedValue({
+      id: 'drv-1',
+      userId: 'user-drv-1',
+      personnelStatus: PersonnelStatus.ACTIVE,
+    });
+
+    await expect(
+      service.recordReview(
+        {
+          driverProfileId: 'drv-1',
+          medicalFacility: 'Armed Forces Hospital',
+          reviewerBadgeNumber: 'MED-101',
+          outcome: MedicalFitnessOutcome.FIT,
+          operationalRestrictions: [],
+          assessmentDate: '2027-05-01',
+          reviewDueDate: '2026-05-01',
+        },
+        medicalOfficer,
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('omits documentProofUrl and reviewerBadgeNumber for non-medical licensing admins', async () => {
+    mockPrisma.medicalFitnessReview.findMany.mockResolvedValue([]);
+    mockPrisma.medicalFitnessReview.count.mockResolvedValue(0);
+
+    await service.findAll({}, licensingAdmin);
+
+    const callArg = mockPrisma.medicalFitnessReview.findMany.mock.calls[0][0];
+    expect(callArg.select.documentProofUrl).toBeUndefined();
+    expect(callArg.select.reviewerBadgeNumber).toBeUndefined();
+    expect(callArg.select.outcome).toBe(true);
+    expect(callArg.select.operationalRestrictions).toBe(true);
+  });
+
+  it('records FIT_WITH_RESTRICTIONS and advances MEDICAL_PENDING to READY_FOR_APPROVAL', async () => {
+    mockPrisma.driverProfile.findUnique.mockResolvedValue({
+      id: 'drv-1',
+      userId: 'user-drv-1',
+      personnelStatus: PersonnelStatus.ACTIVE,
+    });
+    mockPrisma.application.findUnique.mockResolvedValue({
+      id: 'app-1',
+      driverProfileId: 'drv-1',
+      status: ApplicationStatus.MEDICAL_PENDING,
+    });
+
+    mockTx.medicalFitnessReview.create.mockResolvedValue({
+      id: 'med-1',
+      outcome: MedicalFitnessOutcome.FIT_WITH_RESTRICTIONS,
+      operationalRestrictions: ['CORRECTIVE_LENSES'],
+    });
+
+    const result = await service.recordReview(
+      {
+        driverProfileId: 'drv-1',
+        applicationId: 'app-1',
+        medicalFacility: 'Armed Forces Hospital',
+        reviewerBadgeNumber: 'MED-101',
+        outcome: MedicalFitnessOutcome.FIT_WITH_RESTRICTIONS,
+        operationalRestrictions: ['CORRECTIVE_LENSES'],
+        assessmentDate: '2026-11-01',
+        reviewDueDate: '2029-11-01',
+      },
+      medicalOfficer,
+    );
+
+    expect(result.operationalRestrictions).toEqual(['CORRECTIVE_LENSES']);
+    expect(mockTx.application.update).toHaveBeenCalledWith({
+      where: { id: 'app-1' },
+      data: {
+        status: ApplicationStatus.READY_FOR_APPROVAL,
+        currentStage: 'Ready for Command Approval',
+        rejectionReason: null,
+      },
+    });
+  });
+});
