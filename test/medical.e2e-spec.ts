@@ -133,7 +133,9 @@ describe('Medical Fitness & Privacy Workflow (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send(completeDriver({
         serviceNumber: testServiceNum,
-        fullName: 'Cpl. Medical E2E Candidate',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Medical',
         dateOfBirth: '1990-02-20',
         unitId: coordUnitId,
       }))

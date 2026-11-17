@@ -12,11 +12,16 @@ import {
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { generateTempPassword, tempPasswordExpiry } from '../../../common/utils/password.util';
+import { composeFullName, normalizeNamePart } from '../../../common/utils/person-name.util';
 import {
   MIN_DRIVER_AGE,
+  REQUIRED_PROFILE_FIELDS,
   calculateAge,
+  lockedProfileFields,
   missingProfileFields,
   profileStatusFor,
+  sameProfileValue,
+  type RequiredProfileField,
 } from '../helpers/profile-completeness.helper';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { PaginatedResult } from '../../../common/dto/paginated-result.dto';
@@ -543,7 +548,7 @@ export class DriversService {
         results.push({
           rowIndex: i,
           serviceNumber: normalizedService,
-          fullName: item.fullName.trim(),
+          fullName: composeFullName(item.firstName, item.middleName, item.lastName),
           status: 'CREATED',
           driver: created,
           application: created.preTrainedApplication ?? undefined,
@@ -554,7 +559,7 @@ export class DriversService {
         results.push({
           rowIndex: i,
           serviceNumber: normalizedService,
-          fullName: item.fullName.trim(),
+          fullName: composeFullName(item.firstName, item.middleName, item.lastName),
           status: 'FAILED',
           error: err?.message || 'Failed to register driver.',
         });
@@ -616,6 +621,12 @@ export class DriversService {
     } | null = null,
   ) {
     const normalizedEmail = dto.email?.trim().toLowerCase() || null;
+    const names = {
+      firstName: normalizeNamePart(dto.firstName),
+      middleName: normalizeNamePart(dto.middleName),
+      lastName: normalizeNamePart(dto.lastName),
+      fullName: composeFullName(dto.firstName, dto.middleName, dto.lastName),
+    };
     let existingUser = await tx.user.findUnique({
       where: { serviceNumber: normalizedService },
     });
@@ -625,7 +636,7 @@ export class DriversService {
       existingUser = await tx.user.create({
         data: {
           serviceNumber: normalizedService,
-          fullName: dto.fullName.trim(),
+          ...names,
           rank: dto.rank?.trim() || null,
           email: normalizedEmail,
           phone: dto.contactPhone?.trim() || null,
@@ -658,7 +669,7 @@ export class DriversService {
       data: {
         userId: existingUser.id,
         serviceNumber: normalizedService,
-        fullName: dto.fullName.trim(),
+        ...names,
         rank: dto.rank?.trim() || null,
         gender: dto.gender,
         nationalIdNumber: normalizedNationalId,
@@ -712,7 +723,11 @@ export class DriversService {
         'Driver profile not found.',
       );
     }
-    return { ...profile, missingFields: missingProfileFields(profile) };
+    return {
+      ...profile,
+      missingFields: missingProfileFields(profile),
+      lockedFields: lockedProfileFields(profile),
+    };
   }
 
   /**
@@ -722,7 +737,6 @@ export class DriversService {
   async updateMine(userId: string, dto: UpdateMyProfileDto) {
     const profile = await this.prisma.driverProfile.findUnique({
       where: { userId },
-      select: { id: true },
     });
     if (!profile) {
       throw new AppNotFoundException(
@@ -731,11 +745,50 @@ export class DriversService {
         'Driver profile not found.',
       );
     }
-    const updated = await this.update(profile.id, dto);
-    return { ...updated, missingFields: missingProfileFields(updated) };
+
+    // Details an administrator already entered are read-only for the driver.
+    // Re-sending the same value is harmless; trying to change one is refused.
+    const locked = new Set<string>(lockedProfileFields(profile));
+    const editable: Record<string, unknown> = {};
+    const refused: string[] = [];
+    for (const [field, value] of Object.entries(dto)) {
+      if (value === undefined) continue;
+      if (!locked.has(field)) {
+        editable[field] = value;
+      } else if (
+        !sameProfileValue(field as RequiredProfileField, profile[field as RequiredProfileField], value)
+      ) {
+        refused.push(field);
+      }
+    }
+    if (refused.length > 0) {
+      throw new AppForbiddenException(
+        'PROFILE_FIELD_LOCKED',
+        { fields: refused.join(', ') },
+        `These details were entered by your administrator and cannot be changed here: ${refused.join(', ')}.`,
+      );
+    }
+
+    const updated = await this.update(profile.id, editable as UpdateDriverDto, {
+      selfEntered: Object.keys(editable),
+    });
+    return {
+      ...updated,
+      missingFields: missingProfileFields(updated),
+      lockedFields: lockedProfileFields(updated),
+    };
   }
 
-  async update(id: string, dto: UpdateDriverDto) {
+  /**
+   * `opts.selfEntered` marks the call as the driver editing their own profile:
+   * the fields they send are recorded as theirs. Without it (an administrator),
+   * the fields sent become admin-owned again, i.e. read-only for the driver.
+   */
+  async update(
+    id: string,
+    dto: UpdateDriverDto,
+    opts: { selfEntered?: string[] } = {},
+  ) {
     const existing = await this.prisma.driverProfile.findUnique({
       where: { id },
     });
@@ -764,6 +817,33 @@ export class DriversService {
           `Driver profile already exists for National / Fayda ID ${normalizedNationalId}.`,
         );
       }
+    }
+
+    // The three name parts travel together; the combined name is rebuilt from them.
+    let names:
+      | { firstName: string; middleName: string; lastName: string; fullName: string }
+      | undefined;
+    if (
+      dto.firstName !== undefined ||
+      dto.middleName !== undefined ||
+      dto.lastName !== undefined
+    ) {
+      const firstName = normalizeNamePart(dto.firstName ?? existing.firstName ?? '');
+      const middleName = normalizeNamePart(dto.middleName ?? existing.middleName ?? '');
+      const lastName = normalizeNamePart(dto.lastName ?? existing.lastName ?? '');
+      if (!firstName || !middleName || !lastName) {
+        throw new AppBadRequestException(
+          'NAME_PARTS_REQUIRED',
+          {},
+          "First name, father's name and grandfather's name are all required.",
+        );
+      }
+      names = {
+        firstName,
+        middleName,
+        lastName,
+        fullName: composeFullName(firstName, middleName, lastName),
+      };
     }
 
     let dob: Date | undefined;
@@ -805,11 +885,14 @@ export class DriversService {
     // The account's email/phone are the same contact details, keep them in step.
     if (
       existing.userId &&
-      (normalizedEmail !== undefined || normalizedContactPhone !== undefined)
+      (normalizedEmail !== undefined ||
+        normalizedContactPhone !== undefined ||
+        names)
     ) {
       await this.prisma.user.update({
         where: { id: existing.userId },
         data: {
+          ...(names ?? {}),
           ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
           ...(normalizedContactPhone !== undefined
             ? { phone: normalizedContactPhone }
@@ -819,7 +902,10 @@ export class DriversService {
     }
 
     const data = {
-      fullName: dto.fullName?.trim(),
+      fullName: names?.fullName,
+      firstName: names?.firstName,
+      middleName: names?.middleName,
+      lastName: names?.lastName,
       rank: dto.rank !== undefined ? dto.rank.trim() || null : undefined,
       gender: dto.gender,
       nationalIdNumber: normalizedNationalId,
@@ -867,10 +953,26 @@ export class DriversService {
     };
     const profileStatus = profileStatusFor(merged);
 
+    // Who owns each field now: self-service edits are the driver's, anything an
+    // administrator sets reverts to admin-owned (locked for the driver).
+    const touched = REQUIRED_PROFILE_FIELDS.filter(
+      (f) => data[f as keyof typeof data] !== undefined,
+    );
+    const previousOwn = new Set(existing.selfEnteredFields ?? []);
+    const nextOwn = new Set(previousOwn);
+    for (const f of touched) {
+      if (opts.selfEntered) nextOwn.add(f);
+      else nextOwn.delete(f);
+    }
+    const ownChanged =
+      nextOwn.size !== previousOwn.size ||
+      [...nextOwn].some((f) => !previousOwn.has(f));
+
     return this.prisma.driverProfile.update({
       where: { id },
       data: {
         ...data,
+        ...(ownChanged ? { selfEnteredFields: [...nextOwn] } : {}),
         profileStatus,
         profileCompletedAt:
           profileStatus === 'COMPLETE'

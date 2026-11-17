@@ -79,7 +79,9 @@ describe('Personnel & MinIO Storage (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send({
         serviceNumber: testServiceNum,
-        fullName: 'Sgt. E2E Test Driver',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Photo',
         dateOfBirth: '1994-06-15',
         email: `e2e.photo.${testServiceNum.toLowerCase()}@mod.gov.et`,
         contactPhone: '+251911000999',
@@ -99,7 +101,9 @@ describe('Personnel & MinIO Storage (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send({
         serviceNumber: testServiceNum,
-        fullName: 'Duplicate Attempt',
+        firstName: 'Duplicate',
+        middleName: 'Attempt',
+        lastName: 'Tester',
         dateOfBirth: '1994-06-15',
         email: `e2e.dup.${testServiceNum.toLowerCase()}@mod.gov.et`,
         contactPhone: '+251911000998',
@@ -129,7 +133,9 @@ describe('Personnel & MinIO Storage (e2e)', () => {
         drivers: [
           {
             serviceNumber: bulkCode1,
-            fullName: 'Cpl. Bulk One',
+            firstName: 'Bulk',
+            middleName: 'One',
+            lastName: 'Tester',
             email: `${bulkCode1.toLowerCase()}@mod.gov.et`,
             contactPhone: '+251911000101',
             rank: 'Corporal',
@@ -141,7 +147,9 @@ describe('Personnel & MinIO Storage (e2e)', () => {
           },
           {
             serviceNumber: bulkCode2,
-            fullName: 'Pvt. Bulk Two',
+            firstName: 'Bulk',
+            middleName: 'Two',
+            lastName: 'Tester',
             email: `${bulkCode2.toLowerCase()}@mod.gov.et`,
             contactPhone: '+251911000102',
             rank: 'Private',

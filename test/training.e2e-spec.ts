@@ -123,7 +123,9 @@ describe('Training & Attendance Workflow (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send(completeDriver({
         serviceNumber: testServiceNum,
-        fullName: 'Cpl. Training E2E Candidate',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Training',
         dateOfBirth: '1992-07-01',
         unitId: coordUnitId,
       }))

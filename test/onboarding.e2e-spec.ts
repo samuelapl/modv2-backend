@@ -81,7 +81,9 @@ describe('Driver onboarding (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .send({
           serviceNumber: staffNo,
-          fullName: 'Lt. Onboarding Staff',
+          firstName: 'Onboarding',
+          middleName: 'Staff',
+          lastName: 'Tester',
           rank: 'Lieutenant',
           phone: '+251911000200',
           roles: ['INSTRUCTOR'],
@@ -156,7 +158,9 @@ describe('Driver onboarding (e2e)', () => {
         .set('Authorization', `Bearer ${coordToken}`)
         .send({
           serviceNumber: driverNo,
-          fullName: 'Cpl. Onboarding Driver',
+          firstName: 'Onboarding',
+          middleName: 'Driver',
+          lastName: 'Tester',
           rank: 'Corporal',
           email: `onb.${suffix}@mod.gov.et`,
           contactPhone: '+251911000300',
@@ -175,7 +179,7 @@ describe('Driver onboarding (e2e)', () => {
       await request(server())
         .post('/api/v1/personnel/drivers')
         .set('Authorization', `Bearer ${coordToken}`)
-        .send({ serviceNumber: `${driverNo}-X`, fullName: 'No Contact', unitId })
+        .send({ serviceNumber: `${driverNo}-X`, firstName: 'No', middleName: 'Contact', lastName: 'Tester', unitId })
         .expect(400);
     });
 
@@ -229,7 +233,7 @@ describe('Driver onboarding (e2e)', () => {
       await request(server())
         .patch('/api/v1/personnel/drivers/me')
         .set('Authorization', `Bearer ${driverToken}`)
-        .send({ unitId, personnelStatus: 'ACTIVE', fullName: 'Hacked' })
+        .send({ unitId, personnelStatus: 'ACTIVE', firstName: 'Hacked' })
         .expect(400);
     });
 
@@ -278,6 +282,156 @@ describe('Driver onboarding (e2e)', () => {
         .send({ driverProfileId: driverId, type: 'NEW_AUTHORIZATION', categoryIds: [catSpId] })
         .expect(201);
       createdAppIds.push(res.body.data.id);
+    });
+  });
+
+  describe('details entered by the administrator are read-only for the driver', () => {
+    const lockedNo = `MOD-ONB-L-${suffix}`;
+    let token: string;
+
+    afterAll(async () => {
+      const drv = await prisma.driverProfile.findUnique({ where: { serviceNumber: lockedNo } });
+      if (drv) await prisma.driverProfile.delete({ where: { id: drv.id } });
+      await prisma.user.deleteMany({ where: { serviceNumber: lockedNo } });
+    });
+
+    it('the admin pre-fills blood group and DOB; the driver sees them as locked', async () => {
+      const reg = await request(server())
+        .post('/api/v1/personnel/drivers')
+        .set('Authorization', `Bearer ${coordToken}`)
+        .send({
+          serviceNumber: lockedNo,
+          firstName: 'Locked',
+          middleName: 'Fields',
+          lastName: 'Tester',
+          email: `locked.${suffix}@mod.gov.et`,
+          contactPhone: '+251911000400',
+          dateOfBirth: '1991-02-02',
+          bloodGroup: 'A+',
+          unitId,
+        })
+        .expect(201);
+      const temp = reg.body.data.temporaryPassword;
+
+      // skip the forced change here (covered above) to reach the profile endpoints
+      await prisma.user.update({ where: { serviceNumber: lockedNo }, data: { mustChangePassword: false } });
+      token = (await login(lockedNo, temp).expect(200)).body.data.accessToken;
+
+      const me = await request(server())
+        .get('/api/v1/personnel/drivers/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(me.body.data.lockedFields.sort()).toEqual(['bloodGroup', 'dateOfBirth']);
+      expect(me.body.data.missingFields).not.toContain('bloodGroup');
+      expect(me.body.data.missingFields).toContain('gender');
+    });
+
+    it('changing a locked detail is refused (403 PROFILE_FIELD_LOCKED) and nothing is saved', async () => {
+      const res = await request(server())
+        .patch('/api/v1/personnel/drivers/me')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ bloodGroup: 'B+', gender: 'MALE' })
+        .expect(403);
+      expect(JSON.stringify(res.body)).toContain('PROFILE_FIELD_LOCKED');
+
+      const after = await prisma.driverProfile.findUnique({ where: { serviceNumber: lockedNo } });
+      expect(after?.bloodGroup).toBe('A+');
+      expect(after?.gender).toBeNull(); // the whole request was refused
+    });
+
+    it('contact phone and email can no longer be changed by the driver at all', async () => {
+      await request(server())
+        .patch('/api/v1/personnel/drivers/me')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ contactPhone: '+251911999999' })
+        .expect(400);
+      await request(server())
+        .patch('/api/v1/personnel/drivers/me')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ email: 'someone.else@mod.gov.et' })
+        .expect(400);
+    });
+
+    it('re-sending the same value is fine, and the driver can fill in the rest', async () => {
+      const res = await request(server())
+        .patch('/api/v1/personnel/drivers/me')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ bloodGroup: 'A+', gender: 'FEMALE' })
+        .expect(200);
+      expect(res.body.data.gender).toBe('FEMALE');
+      expect(res.body.data.lockedFields.sort()).toEqual(['bloodGroup', 'dateOfBirth']); // gender is theirs, not locked
+
+      // and they can still correct what they typed themselves
+      await request(server())
+        .patch('/api/v1/personnel/drivers/me')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ gender: 'MALE' })
+        .expect(200);
+    });
+  });
+
+  describe('Ministry Staff role created on the Users page', () => {
+    const roleNo = `MOD-ONB-R-${suffix}`;
+
+    afterAll(async () => {
+      const drv = await prisma.driverProfile.findUnique({ where: { serviceNumber: roleNo } });
+      if (drv) await prisma.driverProfile.delete({ where: { id: drv.id } });
+      await prisma.user.deleteMany({ where: { serviceNumber: roleNo } });
+    });
+
+    it('creates the driver profile automatically, incomplete, with the basics copied over', async () => {
+      const res = await request(server())
+        .post('/api/v1/users')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          serviceNumber: roleNo,
+          firstName: 'Role',
+          middleName: 'Driver',
+          lastName: 'Tester',
+          rank: 'Private',
+          phone: '+251911000600',
+          roles: ['STAFF_DRIVER'],
+          unitId,
+        })
+        .expect(201);
+      expect(res.body.data.driverProfile).toMatchObject({ fullName: 'Role Driver Tester', profileStatus: 'INCOMPLETE' });
+
+      const drv = await prisma.driverProfile.findUnique({ where: { serviceNumber: roleNo } });
+      expect(drv).toMatchObject({ rank: 'Private', contactPhone: '+251911000600', unitId, profileStatus: 'INCOMPLETE' });
+      expect(drv?.dateOfBirth).toBeNull();
+    });
+
+    it('that driver can open their onboarding like any registered driver', async () => {
+      const temp = (
+        await request(server())
+          .post(`/api/v1/users/${(await prisma.user.findUnique({ where: { serviceNumber: roleNo } }))!.id}/reset-password`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .expect(201)
+      ).body.data.temporaryPassword;
+      await prisma.user.update({ where: { serviceNumber: roleNo }, data: { mustChangePassword: false } });
+      const token = (await login(roleNo, temp).expect(200)).body.data.accessToken;
+
+      const me = await request(server())
+        .get('/api/v1/personnel/drivers/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(me.body.data.serviceNumber).toBe(roleNo);
+      expect(me.body.data.missingFields).toContain('dateOfBirth');
+    });
+
+    it('giving the role to an existing staff account adds the profile too', async () => {
+      const user = await prisma.user.findUnique({ where: { serviceNumber: staffNo } });
+      expect(await prisma.driverProfile.findUnique({ where: { userId: user!.id } })).toBeNull();
+
+      await request(server())
+        .patch(`/api/v1/users/${user!.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ roles: ['INSTRUCTOR', 'STAFF_DRIVER'], unitId })
+        .expect(200);
+
+      const drv = await prisma.driverProfile.findUnique({ where: { userId: user!.id } });
+      expect(drv).toMatchObject({ serviceNumber: staffNo, profileStatus: 'INCOMPLETE' });
+      await prisma.driverProfile.delete({ where: { id: drv!.id } }); // staffNo user is cleaned up by afterAll
     });
   });
 

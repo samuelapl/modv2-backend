@@ -119,7 +119,9 @@ describe('Maker-Checker Approval & Credential Issuance (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send(completeDriver({
         serviceNumber: testServiceNum,
-        fullName: 'Sgt. Credential E2E Driver',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Credential',
         dateOfBirth: '1991-09-12',
         unitId: coordUnitId,
       }))

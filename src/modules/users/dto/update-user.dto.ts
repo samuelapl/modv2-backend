@@ -13,15 +13,24 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { IsPersonName } from '../../../common/utils/person-name.util';
 import { Permission } from '../../../common/enums/permissions.enum';
 
 export class UpdateUserDto {
-  @ApiPropertyOptional({ example: 'Maj. Dawit Bekele' })
+  @ApiPropertyOptional({ example: 'Dawit', description: 'Given name. Send all three name parts together.' })
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  @MinLength(2)
-  fullName?: string;
+  @IsPersonName()
+  firstName?: string;
+
+  @ApiPropertyOptional({ example: 'Bekele', description: "Father's name." })
+  @IsOptional()
+  @IsPersonName()
+  middleName?: string;
+
+  @ApiPropertyOptional({ example: 'Alemu', description: "Grandfather's name." })
+  @IsOptional()
+  @IsPersonName()
+  lastName?: string;
 
   @ApiPropertyOptional({ example: 'Major' })
   @IsOptional()

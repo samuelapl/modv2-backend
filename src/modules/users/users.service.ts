@@ -4,6 +4,7 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/paginated-result.dto';
 import { generateTempPassword, tempPasswordExpiry } from '../../common/utils/password.util';
+import { composeFullName, normalizeNamePart } from '../../common/utils/person-name.util';
 import { PermissionResolverService } from '../../common/services/permission-resolver.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -27,6 +28,35 @@ function assertUnitAssigned(roles: SystemRole[], unitId: string | null | undefin
   }
 }
 
+/**
+ * A STAFF_DRIVER account always has a driver profile (applications, training and
+ * permits hang off it). The profile starts incomplete with the basics already on
+ * the account; the driver fills in the rest themselves.
+ */
+function newDriverProfile(user: {
+  serviceNumber: string;
+  fullName: string;
+  firstName?: string | null;
+  middleName?: string | null;
+  lastName?: string | null;
+  rank: string | null;
+  phone: string | null;
+  unitId: string;
+}) {
+  return {
+    create: {
+      serviceNumber: user.serviceNumber,
+      fullName: user.fullName,
+      firstName: user.firstName ?? null,
+      middleName: user.middleName ?? null,
+      lastName: user.lastName ?? null,
+      rank: user.rank,
+      contactPhone: user.phone,
+      unitId: user.unitId,
+    },
+  };
+}
+
 function normalizeOptionalEmail(
   email: string | null | undefined,
 ): string | null | undefined {
@@ -39,6 +69,9 @@ const USER_SELECT = {
   id: true,
   serviceNumber: true,
   fullName: true,
+  firstName: true,
+  middleName: true,
+  lastName: true,
   rank: true,
   phone: true,
   email: true,
@@ -164,10 +197,17 @@ export class UsersService {
     const temporaryPassword = dto.password ?? generateTempPassword();
     const passwordHash = await bcrypt.hash(temporaryPassword, 10);
 
+    const names = {
+      firstName: normalizeNamePart(dto.firstName),
+      middleName: normalizeNamePart(dto.middleName),
+      lastName: normalizeNamePart(dto.lastName),
+      fullName: composeFullName(dto.firstName, dto.middleName, dto.lastName),
+    };
+
     const created = await this.prisma.user.create({
       data: {
         serviceNumber: normalizedService,
-        fullName: dto.fullName.trim(),
+        ...names,
         rank: dto.rank.trim(),
         phone: dto.phone.trim(),
         email: normalizedEmail,
@@ -177,6 +217,17 @@ export class UsersService {
         customPermissions: dto.customPermissions || [],
         mustChangePassword: true,
         tempPasswordExpiresAt: tempPasswordExpiry(),
+        // Created together with the account, so there is never a driver without a profile.
+        driverProfile:
+          dto.roles.includes(SystemRole.STAFF_DRIVER) && normalizedUnitId
+            ? newDriverProfile({
+                serviceNumber: normalizedService,
+                ...names,
+                rank: dto.rank.trim(),
+                phone: dto.phone.trim(),
+                unitId: normalizedUnitId,
+              })
+            : undefined,
       },
       select: USER_SELECT,
     });
@@ -221,10 +272,43 @@ export class UsersService {
     const nextEmail = normalizeOptionalEmail(dto.email);
     await this.assertEmailAvailable(nextEmail, id);
 
+    // Adding the driver role to an existing account gives it a profile too.
+    // (Removing the role keeps the profile: applications and permits may refer to it.)
+    // The three name parts travel together; the combined name is rebuilt from them.
+    let names:
+      | { firstName: string; middleName: string; lastName: string; fullName: string }
+      | undefined;
+    if (
+      dto.firstName !== undefined ||
+      dto.middleName !== undefined ||
+      dto.lastName !== undefined
+    ) {
+      const firstName = normalizeNamePart(dto.firstName ?? current.firstName ?? '');
+      const middleName = normalizeNamePart(dto.middleName ?? current.middleName ?? '');
+      const lastName = normalizeNamePart(dto.lastName ?? current.lastName ?? '');
+      if (!firstName || !middleName || !lastName) {
+        throw new AppBadRequestException(
+          'NAME_PARTS_REQUIRED',
+          {},
+          "First name, father's name and grandfather's name are all required.",
+        );
+      }
+      names = {
+        firstName,
+        middleName,
+        lastName,
+        fullName: composeFullName(firstName, middleName, lastName),
+      };
+    }
+
+    const nextRoles = dto.roles ?? current.roles;
+    const needsProfile =
+      nextRoles.includes(SystemRole.STAFF_DRIVER) && !current.driverProfile && nextUnitId;
+
     return this.prisma.user.update({
       where: { id },
       data: {
-        fullName: dto.fullName !== undefined ? dto.fullName.trim() : undefined,
+        ...(names ?? {}),
         rank: dto.rank !== undefined ? dto.rank.trim() : undefined,
         phone: dto.phone !== undefined ? dto.phone.trim() : undefined,
         email: nextEmail,
@@ -232,6 +316,21 @@ export class UsersService {
         unitId: dto.unitId !== undefined ? nextUnitId : undefined,
         isActive: dto.isActive,
         customPermissions: dto.customPermissions,
+        driverProfile: needsProfile
+          ? newDriverProfile({
+              serviceNumber: current.serviceNumber,
+              fullName: names?.fullName || current.fullName || current.serviceNumber,
+              firstName: names?.firstName ?? current.firstName,
+              middleName: names?.middleName ?? current.middleName,
+              lastName: names?.lastName ?? current.lastName,
+              rank: (dto.rank !== undefined ? dto.rank.trim() : current.rank) ?? null,
+              phone: (dto.phone !== undefined ? dto.phone.trim() : current.phone) ?? null,
+              unitId: nextUnitId as string,
+            })
+          : // keep an existing driver profile's name in step with the account
+            names && current.driverProfile
+            ? { update: { ...names } }
+            : undefined,
       },
       select: USER_SELECT,
     });

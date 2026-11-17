@@ -91,7 +91,9 @@ describe('National License Verification (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send(completeDriver({
         serviceNumber: testServiceNum,
-        fullName: 'Cpl. License E2E Driver',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'License',
         dateOfBirth: '1993-04-12',
         contactPhone: '+251911223344',
         unitId: coordUnitId,

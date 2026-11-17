@@ -11,14 +11,24 @@ import {
   IsUUID,
   ValidateIf,
 } from 'class-validator';
+import { IsPersonName } from '../../../common/utils/person-name.util';
 import { BLOOD_GROUPS } from './create-driver.dto';
 
 export class UpdateDriverDto {
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Given name. Send all three name parts together.' })
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  fullName?: string;
+  @IsPersonName()
+  firstName?: string;
+
+  @ApiPropertyOptional({ description: "Father's name." })
+  @IsOptional()
+  @IsPersonName()
+  middleName?: string;
+
+  @ApiPropertyOptional({ description: "Grandfather's name." })
+  @IsOptional()
+  @IsPersonName()
+  lastName?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

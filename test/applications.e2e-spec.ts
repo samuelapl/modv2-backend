@@ -107,7 +107,9 @@ describe('Categories & Applications Workflow (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send(completeDriver({
         serviceNumber: testServiceNum,
-        fullName: 'Sgt. App Workflow E2E',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Workflow',
         dateOfBirth: '1992-05-10',
         contactPhone: '+251911778899',
         unitId: coordUnitId,

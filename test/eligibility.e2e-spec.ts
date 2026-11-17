@@ -128,7 +128,9 @@ describe('Dispatch Eligibility & Gate QR Scanner (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send(completeDriver({
         serviceNumber: testServiceNum,
-        fullName: 'Cpl. Dispatch E2E Driver',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Dispatch',
         dateOfBirth: '1991-04-04',
         unitId: coordUnitId,
       }))

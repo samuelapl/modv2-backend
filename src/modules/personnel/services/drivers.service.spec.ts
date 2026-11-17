@@ -44,7 +44,9 @@ describe('DriversService', () => {
       service.create(
         {
           serviceNumber: 'MOD-YOUNG',
-          fullName: 'Young Recruit',
+          firstName: 'Young',
+          middleName: 'Recruit',
+          lastName: 'Tester',
           email: 'driver1@mod.gov.et',
           contactPhone: '+251911000001',
           dateOfBirth: youngDob.toISOString(),
@@ -65,7 +67,9 @@ describe('DriversService', () => {
       service.create(
         {
           serviceNumber: 'MOD-CROSS',
-          fullName: 'Sgt. Cross',
+          firstName: 'Cross',
+          middleName: 'Bikila',
+          lastName: 'Tester',
           email: 'driver2@mod.gov.et',
           contactPhone: '+251911000002',
           dateOfBirth: '1995-01-01',
@@ -89,7 +93,9 @@ describe('DriversService', () => {
       service.create(
         {
           serviceNumber: 'MOD-88219',
-          fullName: 'Duplicate Soldier',
+          firstName: 'Duplicate',
+          middleName: 'Soldier',
+          lastName: 'Tester',
           email: 'driver3@mod.gov.et',
           contactPhone: '+251911000003',
           dateOfBirth: '1995-01-01',
@@ -136,7 +142,9 @@ describe('DriversService', () => {
       service.create(
         {
           serviceNumber: 'MOD-88299',
-          fullName: 'Sgt. Tesfaye',
+          firstName: 'Tesfaye',
+          middleName: 'Bikila',
+          lastName: 'Tester',
           email: 'driver4@mod.gov.et',
           rank: 'Sergeant',
           gender: 'MALE',
@@ -183,7 +191,9 @@ describe('DriversService', () => {
     const created = await service.create(
       {
         serviceNumber: ' mod-77001 ',
-        fullName: 'Sgt. Abebe Bikila',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Tester',
         email: 'driver5@mod.gov.et',
         rank: 'Sergeant',
         gender: 'MALE',
@@ -212,7 +222,10 @@ describe('DriversService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           serviceNumber: 'MOD-77001',
-          fullName: 'Sgt. Abebe Bikila',
+          firstName: 'Abebe',
+          middleName: 'Bikila',
+          lastName: 'Tester',
+          fullName: 'Abebe Bikila Tester', // composed, no title
           rank: 'Sergeant',
           phone: '+251911223344',
           mustChangePassword: true,
@@ -311,7 +324,9 @@ describe('DriversService', () => {
         drivers: [
           {
             serviceNumber: 'MOD-BULK-1',
-            fullName: 'Cpl. Kebede',
+            firstName: 'Kebede',
+            middleName: 'Bikila',
+            lastName: 'Tester',
             email: 'driver8@mod.gov.et',
             contactPhone: '+251911000008',
             dateOfBirth: '1994-05-12',
@@ -320,7 +335,7 @@ describe('DriversService', () => {
           },
           {
             serviceNumber: 'MOD-EXISTS',
-            fullName: 'Already Registered',
+            firstName: 'Already', middleName: 'Registered', lastName: 'Tester',
             email: 'driver9@mod.gov.et',
             contactPhone: '+251911000009',
             dateOfBirth: '1992-01-01',
@@ -328,7 +343,7 @@ describe('DriversService', () => {
           },
           {
             serviceNumber: 'MOD-YOUNG',
-            fullName: 'Too Young',
+            firstName: 'Too', middleName: 'Young', lastName: 'Tester',
             email: 'driver10@mod.gov.et',
             contactPhone: '+251911000010',
             dateOfBirth: `${youngYear}-01-01`,
@@ -387,7 +402,9 @@ describe('DriversService', () => {
             drivers: [
               {
                 serviceNumber: 'MOD-PT-1',
-                fullName: 'Sgt. Pre Trained',
+                firstName: 'Pre',
+                middleName: 'Trained',
+                lastName: 'Tester',
                 email: 'driver11@mod.gov.et',
                 contactPhone: '+251911000011',
                 dateOfBirth: '1990-01-01',
@@ -435,7 +452,9 @@ describe('DriversService', () => {
           drivers: [
             {
               serviceNumber: 'MOD-PT-1',
-              fullName: 'Sgt. Pre Trained',
+              firstName: 'Pre',
+              middleName: 'Trained',
+              lastName: 'Tester',
               email: 'driver12@mod.gov.et',
               contactPhone: '+251911000012',
               dateOfBirth: '1990-01-01',
@@ -444,7 +463,7 @@ describe('DriversService', () => {
             },
             {
               serviceNumber: 'MOD-PT-2',
-              fullName: 'Cpl. Same Permit',
+              firstName: 'Same', middleName: 'Permit', lastName: 'Tester',
               email: 'driver13@mod.gov.et',
               contactPhone: '+251911000013',
               dateOfBirth: '1991-01-01',
@@ -483,7 +502,9 @@ describe('DriversService', () => {
     };
     const lean = {
       serviceNumber: 'MOD-LEAN-1',
-      fullName: 'Pvt. Lean',
+      firstName: 'Lean',
+      middleName: 'Basic',
+      lastName: 'Tester',
       rank: 'Private',
       email: 'lean@mod.gov.et',
       contactPhone: '+251911000111',
@@ -676,7 +697,7 @@ describe('DriversService', () => {
 
       it('updateMine looks the profile up by the signed-in user, not by a client-sent id', async () => {
         prisma.driverProfile.findUnique
-          .mockResolvedValueOnce({ id: 'drv-1' }) // lookup by userId
+          .mockResolvedValueOnce(incomplete) // lookup by userId
           .mockResolvedValueOnce(incomplete) // update(): existing
           .mockResolvedValue(null);
         prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
@@ -687,6 +708,85 @@ describe('DriversService', () => {
           expect.objectContaining({ where: { userId: 'user-1' } }),
         );
         expect(res.missingFields).toContain('photoUrl');
+      });
+
+      describe('details entered by an administrator are read-only for the driver', () => {
+        const adminFilled = {
+          ...incomplete,
+          bloodGroup: 'A+',
+          dateOfBirth: new Date('1990-01-01'),
+          selfEnteredFields: [] as string[],
+        };
+
+        it('reports them as locked', async () => {
+          prisma.driverProfile.findUnique.mockResolvedValue({ ...adminFilled, unit: {}, user: {} });
+          const res: any = await service.findMine('user-1');
+          expect(res.lockedFields).toEqual(['dateOfBirth', 'bloodGroup']);
+          expect(res.missingFields).toContain('photoUrl');
+        });
+
+        it('refuses to change one, and saves nothing', async () => {
+          prisma.driverProfile.findUnique.mockResolvedValue(adminFilled);
+          await expect(
+            service.updateMine('user-1', { bloodGroup: 'B+', gender: 'MALE' }),
+          ).rejects.toMatchObject({
+            response: { code: 'PROFILE_FIELD_LOCKED', params: { fields: 'bloodGroup' } },
+          });
+          expect(prisma.driverProfile.update).not.toHaveBeenCalled();
+        });
+
+        it('refuses to change a locked date of birth', async () => {
+          prisma.driverProfile.findUnique.mockResolvedValue(adminFilled);
+          await expect(
+            service.updateMine('user-1', { dateOfBirth: '1995-05-05' }),
+          ).rejects.toMatchObject({ response: { code: 'PROFILE_FIELD_LOCKED' } });
+        });
+
+        it('ignores a locked field re-sent with the same value, and still saves the rest', async () => {
+          prisma.driverProfile.findUnique
+            .mockResolvedValueOnce(adminFilled)
+            .mockResolvedValueOnce(adminFilled)
+            .mockResolvedValue(null);
+          prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
+
+          await service.updateMine('user-1', {
+            bloodGroup: 'a+',
+            dateOfBirth: '1990-01-01',
+            gender: 'FEMALE',
+          });
+
+          const data = prisma.driverProfile.update.mock.calls[0][0].data;
+          expect(data.gender).toBe('FEMALE');
+          expect(data.bloodGroup).toBeUndefined(); // untouched
+          expect(data.dateOfBirth).toBeUndefined();
+          expect(data.selfEnteredFields).toEqual(['gender']); // only what the driver typed
+        });
+
+        it('lets the driver keep correcting what they typed themselves', async () => {
+          const own = { ...adminFilled, gender: 'MALE', selfEnteredFields: ['gender'] };
+          prisma.driverProfile.findUnique
+            .mockResolvedValueOnce(own)
+            .mockResolvedValueOnce(own)
+            .mockResolvedValue(null);
+          prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
+
+          await service.updateMine('user-1', { gender: 'FEMALE' });
+
+          expect(prisma.driverProfile.update.mock.calls[0][0].data.gender).toBe('FEMALE');
+        });
+
+        it('a field an administrator edits becomes admin-owned again', async () => {
+          prisma.driverProfile.findUnique.mockResolvedValue({
+            ...incomplete,
+            gender: 'MALE',
+            selfEnteredFields: ['gender', 'photoUrl'],
+          });
+          prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
+
+          await service.update('drv-1', { gender: 'FEMALE' }); // admin: no selfEntered option
+
+          expect(prisma.driverProfile.update.mock.calls[0][0].data.selfEnteredFields).toEqual(['photoUrl']);
+        });
       });
 
       it('updateMine fails for an account without a driver profile', async () => {

@@ -72,7 +72,9 @@ describe('UsersService', () => {
     await expect(
       service.create({
         serviceNumber: 'MOD-ADMIN-001',
-        fullName: 'Col. Test User',
+        firstName: 'Test',
+        middleName: 'User',
+        lastName: 'Tester',
         rank: 'Colonel',
         phone: '+251911000001',
         password: 'Password@123',
@@ -86,7 +88,7 @@ describe('UsersService', () => {
     prisma.user.create.mockResolvedValue({
       id: 'new-id',
       serviceNumber: 'MOD-TEST-99',
-      fullName: 'Maj. Dawit Bekele',
+      firstName: 'Dawit', middleName: 'Bekele', lastName: 'Tester',
       rank: 'Major',
       phone: '+251911223344',
       roles: [SystemRole.UNIT_COORDINATOR],
@@ -94,7 +96,7 @@ describe('UsersService', () => {
 
     const result = await service.create({
       serviceNumber: ' mod-test-99 ',
-      fullName: ' Maj. Dawit Bekele ',
+      firstName: 'Dawit', middleName: 'Bekele', lastName: 'Tester',
       rank: ' Major ',
       phone: ' +251911223344 ',
       email: ' DAWIT@MOD.GOV.ET ',
@@ -108,7 +110,7 @@ describe('UsersService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           serviceNumber: 'MOD-TEST-99',
-          fullName: 'Maj. Dawit Bekele',
+          firstName: 'Dawit', middleName: 'Bekele', lastName: 'Tester',
           rank: 'Major',
           phone: '+251911223344',
           email: 'dawit@mod.gov.et',
@@ -128,7 +130,9 @@ describe('UsersService', () => {
 
     const result: any = await service.create({
       serviceNumber: 'MOD-GEN-1',
-      fullName: 'Lt. Generated',
+      firstName: 'Generated',
+      middleName: 'Bikila',
+      lastName: 'Tester',
       rank: 'Lieutenant',
       phone: '+251911000000',
       roles: [SystemRole.INSTRUCTOR],
@@ -138,6 +142,173 @@ describe('UsersService', () => {
     expect(result.temporaryPassword.length).toBeGreaterThanOrEqual(8);
     // only the hash is stored
     expect(prisma.user.create.mock.calls[0][0].data.passwordHash).not.toBe(result.temporaryPassword);
+  });
+
+  describe('driver profile follows the driver role', () => {
+    const unitId = '9f8beb56-c285-4e0b-908d-95b67440884d';
+    const base = {
+      serviceNumber: 'MOD-DRV-1',
+      firstName: 'Auto', middleName: 'Profile', lastName: 'Tester',
+      rank: 'Corporal',
+      phone: '+251911000500',
+      unitId,
+    };
+
+    it('creates the profile together with a Ministry Staff / driver account', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.create.mockImplementation(async ({ data }: any) => ({ id: 'n', ...data }));
+
+      await service.create({ ...base, roles: [SystemRole.STAFF_DRIVER] });
+
+      const data = prisma.user.create.mock.calls[0][0].data;
+      expect(data.driverProfile).toEqual({
+        create: {
+          serviceNumber: 'MOD-DRV-1',
+          fullName: 'Auto Profile Tester',
+          firstName: 'Auto',
+          middleName: 'Profile',
+          lastName: 'Tester',
+          rank: 'Corporal',
+          contactPhone: '+251911000500',
+          unitId,
+        },
+      });
+    });
+
+    it('also creates it when the driver role is combined with another role', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.create.mockImplementation(async ({ data }: any) => ({ id: 'n', ...data }));
+
+      await service.create({ ...base, roles: [SystemRole.STAFF_DRIVER, SystemRole.INSTRUCTOR] });
+
+      expect(prisma.user.create.mock.calls[0][0].data.driverProfile).toBeDefined();
+    });
+
+    it('does not create one for other staff roles', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.create.mockImplementation(async ({ data }: any) => ({ id: 'n', ...data }));
+
+      await service.create({ ...base, roles: [SystemRole.EXAMINER] });
+
+      expect(prisma.user.create.mock.calls[0][0].data.driverProfile).toBeUndefined();
+    });
+
+    it('adding the driver role to an existing account creates the profile', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u-9',
+        ...base,
+        roles: [SystemRole.EXAMINER],
+        driverProfile: null,
+      });
+      prisma.user.update.mockResolvedValue({});
+
+      await service.update('u-9', { roles: [SystemRole.EXAMINER, SystemRole.STAFF_DRIVER] });
+
+      expect(prisma.user.update.mock.calls[0][0].data.driverProfile).toEqual({
+        create: expect.objectContaining({ serviceNumber: 'MOD-DRV-1', unitId, contactPhone: '+251911000500' }),
+      });
+    });
+
+    it('uses the edited name and falls back to the service number when none is on file', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u-9',
+        ...base,
+        fullName: null,
+        roles: [SystemRole.EXAMINER],
+        driverProfile: null,
+      });
+      prisma.user.update.mockResolvedValue({});
+
+      await service.update('u-9', { roles: [SystemRole.STAFF_DRIVER] });
+
+      expect(prisma.user.update.mock.calls[0][0].data.driverProfile.create.fullName).toBe('MOD-DRV-1');
+    });
+
+    it('does not create a second profile, syncs a rename, and keeps the profile when the role is taken away', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u-9',
+        ...base,
+        roles: [SystemRole.STAFF_DRIVER],
+        driverProfile: { id: 'drv-1', firstName: 'x', middleName: 'Bikila', lastName: 'Tester', personnelStatus: 'ACTIVE' },
+      });
+      prisma.user.update.mockResolvedValue({});
+
+      // renaming the account keeps the existing profile's name in step (no second profile)
+      await service.update('u-9', { firstName: 'Renamed', middleName: 'Bikila', lastName: 'Tester' });
+      expect(prisma.user.update.mock.calls[0][0].data.driverProfile).toEqual({
+        update: {
+          firstName: 'Renamed',
+          middleName: 'Bikila',
+          lastName: 'Tester',
+          fullName: 'Renamed Bikila Tester',
+        },
+      });
+
+      await service.update('u-9', { roles: [SystemRole.EXAMINER] });
+      expect(prisma.user.update.mock.calls[1][0].data.driverProfile).toBeUndefined();
+    });
+  });
+
+  describe('names (first / father / grandfather)', () => {
+    it('stores the three parts and a title-free combined name', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      prisma.user.create.mockImplementation(async ({ data }: any) => ({ id: 'n', ...data }));
+
+      await service.create({
+        serviceNumber: 'MOD-N-1',
+        firstName: '  Abebe ',
+        middleName: 'Bikila',
+        lastName: 'Demissie',
+        rank: 'Sergeant',
+        phone: '+251911000700',
+        roles: [SystemRole.EXAMINER],
+      });
+
+      expect(prisma.user.create.mock.calls[0][0].data).toEqual(
+        expect.objectContaining({
+          firstName: 'Abebe',
+          middleName: 'Bikila',
+          lastName: 'Demissie',
+          fullName: 'Abebe Bikila Demissie',
+          rank: 'Sergeant',
+        }),
+      );
+    });
+
+    it('a name change must carry all three parts (legacy accounts have none on file)', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u-1',
+        serviceNumber: 'MOD-1',
+        roles: [SystemRole.EXAMINER],
+        firstName: null,
+        middleName: null,
+        lastName: null,
+        driverProfile: null,
+      });
+      await expect(service.update('u-1', { firstName: 'Abebe' })).rejects.toMatchObject({
+        response: { code: 'NAME_PARTS_REQUIRED' },
+      });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('changing one part keeps the others', async () => {
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u-1',
+        serviceNumber: 'MOD-1',
+        roles: [SystemRole.EXAMINER],
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Demissie',
+        driverProfile: null,
+      });
+      prisma.user.update.mockResolvedValue({});
+
+      await service.update('u-1', { lastName: 'Worku' });
+
+      expect(prisma.user.update.mock.calls[0][0].data).toEqual(
+        expect.objectContaining({ firstName: 'Abebe', middleName: 'Bikila', lastName: 'Worku', fullName: 'Abebe Bikila Worku' }),
+      );
+    });
   });
 
   describe('resetPassword', () => {
@@ -174,7 +345,9 @@ describe('UsersService', () => {
     await expect(
       service.create({
         serviceNumber: 'MOD-TEST-100',
-        fullName: 'Capt. No Unit',
+        firstName: 'No',
+        middleName: 'Unit',
+        lastName: 'Tester',
         rank: 'Captain',
         phone: '+251911223355',
         password: 'Password@123',

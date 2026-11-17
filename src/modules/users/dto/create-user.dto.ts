@@ -13,6 +13,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { IsPersonName } from '../../../common/utils/person-name.util';
 import {
   PASSWORD_MIN_LENGTH,
   PASSWORD_PATTERN,
@@ -26,11 +27,17 @@ export class CreateUserDto {
   @IsNotEmpty()
   serviceNumber: string;
 
-  @ApiProperty({ example: 'Maj. Dawit Bekele' })
-  @IsString()
-  @IsNotEmpty()
-  @MinLength(2)
-  fullName: string;
+  @ApiProperty({ example: 'Dawit', description: 'Given name. No title: the rank has its own field.' })
+  @IsPersonName()
+  firstName: string;
+
+  @ApiProperty({ example: 'Bekele', description: "Father's name." })
+  @IsPersonName()
+  middleName: string;
+
+  @ApiProperty({ example: 'Alemu', description: "Grandfather's name." })
+  @IsPersonName()
+  lastName: string;
 
   @ApiProperty({ example: 'Major' })
   @IsString()

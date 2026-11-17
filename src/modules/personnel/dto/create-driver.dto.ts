@@ -20,6 +20,7 @@ import {
   PASSWORD_PATTERN,
   PASSWORD_POLICY_MESSAGE,
 } from '../../../common/utils/password.util';
+import { IsPersonName } from '../../../common/utils/person-name.util';
 import { PriorPermitDto } from '../../applications/dto/prior-permit.dto';
 
 export const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] as const;
@@ -30,10 +31,17 @@ export class CreateDriverDto {
   @IsNotEmpty()
   serviceNumber: string;
 
-  @ApiProperty({ example: 'Sgt. Abebe Bikila' })
-  @IsString()
-  @IsNotEmpty()
-  fullName: string;
+  @ApiProperty({ example: 'Abebe', description: 'Given name. No title: the rank has its own field.' })
+  @IsPersonName()
+  firstName: string;
+
+  @ApiProperty({ example: 'Bikila', description: "Father's name." })
+  @IsPersonName()
+  middleName: string;
+
+  @ApiProperty({ example: 'Demissie', description: "Grandfather's name." })
+  @IsPersonName()
+  lastName: string;
 
   @ApiPropertyOptional({ example: 'Sergeant' })
   @IsOptional()

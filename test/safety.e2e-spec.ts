@@ -147,7 +147,9 @@ describe('Safety Incidents, Suspensions & QR Lockout (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send(completeDriver({
         serviceNumber: testServiceNum,
-        fullName: 'Sgt. Safety E2E Driver',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Safety',
         dateOfBirth: '1991-06-10',
         unitId: coordUnitId,
       }))

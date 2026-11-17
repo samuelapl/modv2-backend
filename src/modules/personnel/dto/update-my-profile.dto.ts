@@ -2,7 +2,6 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Gender } from '@prisma/client';
 import {
   IsDateString,
-  IsEmail,
   IsEnum,
   IsIn,
   IsNotEmpty,
@@ -12,7 +11,8 @@ import {
 import { BLOOD_GROUPS } from './create-driver.dto';
 
 /**
- * What a driver may edit on their own profile. Deliberately excludes fullName,
+ * What a driver may edit on their own profile (contact phone and email are set by
+ * the administrator at registration and are not editable here). Deliberately excludes fullName,
  * rank, serviceNumber, unit, personnel status and identity verification:
  * those stay under admin control (the global ValidationPipe rejects extras).
  */
@@ -43,17 +43,6 @@ export class UpdateMyProfileDto {
   @IsString()
   @IsNotEmpty()
   photoUrl?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  contactPhone?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsEmail()
-  email?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

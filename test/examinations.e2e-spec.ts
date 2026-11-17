@@ -121,7 +121,9 @@ describe('Examinations & Locked Scoring Workflow (e2e)', () => {
       .set('Authorization', `Bearer ${coordToken}`)
       .send(completeDriver({
         serviceNumber: testServiceNum,
-        fullName: 'Sgt. Exam E2E Candidate',
+        firstName: 'Abebe',
+        middleName: 'Bikila',
+        lastName: 'Examcand',
         dateOfBirth: '1991-03-15',
         unitId: coordUnitId,
       }))

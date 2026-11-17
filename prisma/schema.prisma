@@ -44,7 +44,12 @@ model User {
   id                String              @id @default(uuid())
   email             String?             @unique
   serviceNumber     String              @unique // MoD Military/Staff ID (e.g., MOD-88219)
+  // Ethiopian naming: firstName (given), middleName (father's), lastName (grandfather's).
+  // fullName is the three joined, without any title (rank has its own field).
   fullName          String?
+  firstName         String?
+  middleName        String?
+  lastName          String?
   rank              String?
   phone             String?
   passwordHash      String
@@ -113,6 +118,9 @@ model DriverProfile {
   user                  User               @relation(fields: [userId], references: [id])
   serviceNumber         String             @unique
   fullName              String
+  firstName             String? // given name
+  middleName            String? // father's name
+  lastName              String? // grandfather's name
   rank                  String?
   gender                Gender?
   nationalIdNumber      String?            @unique
@@ -128,6 +136,9 @@ model DriverProfile {
   identityVerifiedAt    DateTime?
   identityVerifiedBy    String?
   profileStatus         ProfileStatus      @default(INCOMPLETE)
+  // Required profile fields the driver typed in themselves. Any other filled
+  // field came from an administrator and is read-only for the driver.
+  selfEnteredFields     String[]           @default([])
   profileCompletedAt    DateTime?
 
   nationalLicense   NationalLicense?

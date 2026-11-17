@@ -27,14 +27,43 @@ export function calculateAge(dob: Date, today: Date = new Date()): number {
 
 type ProfileLike = Partial<Record<RequiredProfileField, unknown>>;
 
+function isBlank(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  return typeof value === 'string' && value.trim() === '';
+}
+
 /** Required fields that are still empty (a blank string counts as empty). */
 export function missingProfileFields(profile: ProfileLike): RequiredProfileField[] {
-  return REQUIRED_PROFILE_FIELDS.filter((field) => {
-    const value = profile[field];
-    if (value === null || value === undefined) return true;
-    if (typeof value === 'string' && value.trim() === '') return true;
-    return false;
-  });
+  return REQUIRED_PROFILE_FIELDS.filter((field) => isBlank(profile[field]));
+}
+
+/**
+ * Fields the driver cannot change themselves: filled in, and not typed in by
+ * the driver (so an administrator supplied them, e.g. at registration).
+ */
+export function lockedProfileFields(
+  profile: ProfileLike & { selfEnteredFields?: string[] | null },
+): RequiredProfileField[] {
+  const own = new Set(profile.selfEnteredFields ?? []);
+  return REQUIRED_PROFILE_FIELDS.filter(
+    (field) => !isBlank(profile[field]) && !own.has(field),
+  );
+}
+
+/** Does the incoming value equal what is stored? (trimmed, case-insensitive for IDs, dates by day) */
+export function sameProfileValue(
+  field: RequiredProfileField,
+  stored: unknown,
+  incoming: unknown,
+): boolean {
+  if (field === 'dateOfBirth') {
+    const a = stored ? new Date(stored as string | Date) : null;
+    const b = incoming ? new Date(incoming as string) : null;
+    if (!a || !b || Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return false;
+    return a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
+  }
+  const norm = (v: unknown) => String(v ?? '').trim().toUpperCase();
+  return norm(stored) === norm(incoming);
 }
 
 export function isProfileComplete(profile: ProfileLike): boolean {
