@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Gender, PersonnelStatus } from '@prisma/client';
 import {
+  IsDateString,
   IsEmail,
   IsEnum,
   IsIn,
@@ -35,6 +36,11 @@ export class UpdateDriverDto {
   @IsString()
   @IsNotEmpty()
   nationalIdNumber?: string;
+
+  @ApiPropertyOptional({ example: '1995-03-10' })
+  @IsOptional()
+  @IsDateString()
+  dateOfBirth?: string;
 
   @ApiPropertyOptional({ enum: BLOOD_GROUPS })
   @IsOptional()

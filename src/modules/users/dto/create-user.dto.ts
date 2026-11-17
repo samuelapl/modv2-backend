@@ -9,9 +9,15 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import {
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_PATTERN,
+  PASSWORD_POLICY_MESSAGE,
+} from '../../../common/utils/password.util';
 import { Permission } from '../../../common/enums/permissions.enum';
 
 export class CreateUserDto {
@@ -42,10 +48,17 @@ export class CreateUserDto {
   @IsEmail()
   email?: string;
 
-  @ApiProperty({ example: 'SecurePass@2026', minLength: 8 })
+  @ApiPropertyOptional({
+    example: 'SecurePass@2026',
+    minLength: 8,
+    description:
+      'Temporary password. Omit to have the server generate one (returned once as temporaryPassword). The user must change it on first login.',
+  })
+  @IsOptional()
   @IsString()
-  @MinLength(8)
-  password: string;
+  @MinLength(PASSWORD_MIN_LENGTH)
+  @Matches(PASSWORD_PATTERN, { message: PASSWORD_POLICY_MESSAGE })
+  password?: string;
 
   @ApiProperty({ enum: SystemRole, isArray: true, example: [SystemRole.UNIT_COORDINATOR] })
   @IsArray()

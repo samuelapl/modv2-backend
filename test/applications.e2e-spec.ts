@@ -6,6 +6,7 @@ import { PrismaService } from './../src/prisma/prisma.service';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 
+import { completeDriver } from './helpers/driver-payload';
 describe('Categories & Applications Workflow (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -104,13 +105,13 @@ describe('Categories & Applications Workflow (e2e)', () => {
     const drvRes = await request(app.getHttpServer())
       .post('/api/v1/personnel/drivers')
       .set('Authorization', `Bearer ${coordToken}`)
-      .send({
+      .send(completeDriver({
         serviceNumber: testServiceNum,
         fullName: 'Sgt. App Workflow E2E',
         dateOfBirth: '1992-05-10',
         contactPhone: '+251911778899',
         unitId: coordUnitId,
-      })
+      }))
       .expect(201);
     createdDriverId = drvRes.body.data.id;
 

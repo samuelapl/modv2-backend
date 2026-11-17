@@ -6,6 +6,7 @@ import { PrismaService } from './../src/prisma/prisma.service';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 
+import { completeDriver } from './helpers/driver-payload';
 describe('Safety Incidents, Suspensions & QR Lockout (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -144,12 +145,12 @@ describe('Safety Incidents, Suspensions & QR Lockout (e2e)', () => {
     const drvRes = await request(app.getHttpServer())
       .post('/api/v1/personnel/drivers')
       .set('Authorization', `Bearer ${coordToken}`)
-      .send({
+      .send(completeDriver({
         serviceNumber: testServiceNum,
         fullName: 'Sgt. Safety E2E Driver',
         dateOfBirth: '1991-06-10',
         unitId: coordUnitId,
-      })
+      }))
       .expect(201);
     createdDriverId = drvRes.body.data.id;
 

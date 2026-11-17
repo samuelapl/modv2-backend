@@ -113,9 +113,59 @@ describe('UsersService', () => {
           phone: '+251911223344',
           email: 'dawit@mod.gov.et',
           passwordHash: expect.any(String),
+          mustChangePassword: true,
+          tempPasswordExpiresAt: expect.any(Date),
         }),
       }),
     );
+    // the admin chose the password, so nothing is echoed back
+    expect((result as any).temporaryPassword).toBeUndefined();
+  });
+
+  it('generates a temporary password when none is given and returns it once', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.create.mockImplementation(async ({ data }: any) => ({ id: 'n', ...data }));
+
+    const result: any = await service.create({
+      serviceNumber: 'MOD-GEN-1',
+      fullName: 'Lt. Generated',
+      rank: 'Lieutenant',
+      phone: '+251911000000',
+      roles: [SystemRole.INSTRUCTOR],
+    });
+
+    expect(result.temporaryPassword).toEqual(expect.any(String));
+    expect(result.temporaryPassword.length).toBeGreaterThanOrEqual(8);
+    // only the hash is stored
+    expect(prisma.user.create.mock.calls[0][0].data.passwordHash).not.toBe(result.temporaryPassword);
+  });
+
+  describe('resetPassword', () => {
+    it('issues a new temporary password and forces a change at next login', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 'u-2', serviceNumber: 'MOD-2' });
+      prisma.user.update.mockResolvedValue({});
+
+      const res = await service.resetPassword('u-2', 'admin-1');
+
+      expect(res.temporaryPassword.length).toBeGreaterThanOrEqual(8);
+      expect(res.expiresAt).toBeInstanceOf(Date);
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'u-2' },
+          data: expect.objectContaining({ mustChangePassword: true }),
+        }),
+      );
+    });
+
+    it('refuses to reset your own password', async () => {
+      await expect(service.resetPassword('admin-1', 'admin-1')).rejects.toThrow(BadRequestException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('404s for an unknown user', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+      await expect(service.resetPassword('ghost', 'admin-1')).rejects.toThrow(NotFoundException);
+    });
   });
 
   it('should reject a unit-scoped role without an organizational unit', async () => {

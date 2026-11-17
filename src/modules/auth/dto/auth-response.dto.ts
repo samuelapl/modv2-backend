@@ -31,6 +31,18 @@ export class AuthenticatedUserDto {
 
   @ApiProperty({ enum: ['en', 'am'], example: 'en' })
   preferredLocale: string;
+
+  @ApiProperty({
+    description: 'True while the user still has an admin-issued temporary password.',
+  })
+  mustChangePassword: boolean;
+
+  @ApiProperty({
+    enum: ['INCOMPLETE', 'COMPLETE'],
+    nullable: true,
+    description: 'Driver profile status; null when the user has no driver profile.',
+  })
+  profileStatus: 'INCOMPLETE' | 'COMPLETE' | null;
 }
 
 export class LoginResponseDto {

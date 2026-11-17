@@ -69,6 +69,13 @@ export async function validateApplicationPrerequisites(
     );
   }
 
+  if (!driver.dateOfBirth) {
+    throw new AppBadRequestException(
+      'PROFILE_INCOMPLETE',
+      { fields: 'dateOfBirth' },
+      'Complete your driver profile before applying. Missing: dateOfBirth.',
+    );
+  }
   const driverAge = calculateDriverAge(new Date(driver.dateOfBirth));
   for (const cat of categories) {
     if (driverAge < cat.minAgeRequired) {

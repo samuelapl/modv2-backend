@@ -6,6 +6,7 @@ import { PrismaService } from './../src/prisma/prisma.service';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 
+import { completeDriver } from './helpers/driver-payload';
 describe('Dispatch Eligibility & Gate QR Scanner (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -125,12 +126,12 @@ describe('Dispatch Eligibility & Gate QR Scanner (e2e)', () => {
     const drvRes = await request(app.getHttpServer())
       .post('/api/v1/personnel/drivers')
       .set('Authorization', `Bearer ${coordToken}`)
-      .send({
+      .send(completeDriver({
         serviceNumber: testServiceNum,
         fullName: 'Cpl. Dispatch E2E Driver',
         dateOfBirth: '1991-04-04',
         unitId: coordUnitId,
-      })
+      }))
       .expect(201);
     createdDriverId = drvRes.body.data.id;
 

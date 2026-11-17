@@ -33,6 +33,7 @@ import {
   resolveNextStage,
 } from './helpers/application-state.helper';
 import { validateApplicationPrerequisites } from './helpers/application-validator.helper';
+import { missingProfileFields } from '../personnel/helpers/profile-completeness.helper';
 import {
   assertRenewalAllowed,
   evaluateRenewal,
@@ -302,6 +303,8 @@ export class ApplicationsService {
       );
     }
 
+    await this.assertProfileComplete(driver.id);
+
     const submitNow = dto.submitImmediately !== false;
     const isReplacement = dto.type === ApplicationType.REPLACEMENT;
 
@@ -472,6 +475,13 @@ export class ApplicationsService {
     }
 
     const lookup = await loadPriorPermitLookup(this.prisma, [dto.priorPermit]);
+    if (!driver.dateOfBirth) {
+      throw new AppBadRequestException(
+        'DRIVER_DOB_REQUIRED_FOR_PRIOR_PERMIT',
+        {},
+        'Date of birth is required when recording an existing permit.',
+      );
+    }
     const prior = resolvePriorPermit(
       dto.priorPermit,
       new Date(driver.dateOfBirth),
@@ -537,6 +547,12 @@ export class ApplicationsService {
 
     this.assertSubmitScope(existing.driverProfile, user);
 
+    // Pre-trained applications are recorded by an officer from the driver's
+    // existing permit, so they do not wait on the driver's self-service profile.
+    if (existing.type !== ApplicationType.PRE_TRAINED) {
+      await this.assertProfileComplete(existing.driverProfile.id);
+    }
+
     const submittable: ApplicationStatus[] = [
       ApplicationStatus.DRAFT,
       ApplicationStatus.RETURNED_FOR_CORRECTION,
@@ -578,10 +594,17 @@ export class ApplicationsService {
 
     // Corrected permit details go through the same checks as registration;
     // this application's own permit number is not treated as a duplicate.
+    if (dto.priorPermit && !existing.driverProfile.dateOfBirth) {
+      throw new AppBadRequestException(
+        'DRIVER_DOB_REQUIRED_FOR_PRIOR_PERMIT',
+        {},
+        'Date of birth is required when recording an existing permit.',
+      );
+    }
     const correctedPermit = dto.priorPermit
       ? resolvePriorPermit(
           dto.priorPermit,
-          existing.driverProfile.dateOfBirth,
+          existing.driverProfile.dateOfBirth!,
           await loadPriorPermitLookup(this.prisma, [dto.priorPermit], existing.id),
         )
       : null;
@@ -1159,6 +1182,34 @@ export class ApplicationsService {
           }
         : null,
     };
+  }
+
+  /**
+   * A driver must finish their profile (DOB, ID, photo, ...) before applying.
+   * Enforced here so it holds regardless of which client calls the API.
+   */
+  private async assertProfileComplete(driverProfileId: string) {
+    const profile = await this.prisma.driverProfile.findUnique({
+      where: { id: driverProfileId },
+      select: {
+        dateOfBirth: true,
+        gender: true,
+        nationalIdNumber: true,
+        bloodGroup: true,
+        photoUrl: true,
+        emergencyContactName: true,
+        emergencyContactPhone: true,
+      },
+    });
+    if (!profile) return; // callers have already handled a missing profile
+    const missing = missingProfileFields(profile);
+    if (missing.length > 0) {
+      throw new AppForbiddenException(
+        'PROFILE_INCOMPLETE',
+        { fields: missing.join(', ') },
+        `Complete your driver profile before applying. Missing: ${missing.join(', ')}.`,
+      );
+    }
   }
 
   private assertSubmitScope(

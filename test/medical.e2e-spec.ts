@@ -6,6 +6,7 @@ import { PrismaService } from './../src/prisma/prisma.service';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 
+import { completeDriver } from './helpers/driver-payload';
 describe('Medical Fitness & Privacy Workflow (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -130,12 +131,12 @@ describe('Medical Fitness & Privacy Workflow (e2e)', () => {
     const drvRes = await request(app.getHttpServer())
       .post('/api/v1/personnel/drivers')
       .set('Authorization', `Bearer ${coordToken}`)
-      .send({
+      .send(completeDriver({
         serviceNumber: testServiceNum,
         fullName: 'Cpl. Medical E2E Candidate',
         dateOfBirth: '1990-02-20',
         unitId: coordUnitId,
-      })
+      }))
       .expect(201);
     createdDriverId = drvRes.body.data.id;
 

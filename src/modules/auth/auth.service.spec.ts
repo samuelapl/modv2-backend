@@ -131,4 +131,91 @@ describe('AuthService', () => {
       select: { preferredLocale: true },
     });
   });
+  describe('onboarding: temporary passwords', () => {
+    const tempUser = async (over: Record<string, unknown> = {}) => ({
+      id: 'user-tmp',
+      serviceNumber: 'MOD-NEW-1',
+      email: 'new@mod.gov.et',
+      passwordHash: await bcrypt.hash('Temp#Pass12', 10),
+      roles: [SystemRole.STAFF_DRIVER],
+      customPermissions: [],
+      unitId: 'unit-1',
+      isActive: true,
+      preferredLocale: 'en',
+      mustChangePassword: true,
+      tempPasswordExpiresAt: new Date(Date.now() + 86400000),
+      driverProfile: { profileStatus: 'INCOMPLETE' },
+      ...over,
+    });
+
+    it('login reports mustChangePassword and the driver profile status', async () => {
+      prisma.user.findUnique.mockResolvedValue(await tempUser());
+      const res = await service.login({ serviceNumber: 'mod-new-1', password: 'Temp#Pass12' });
+      expect(res.user.mustChangePassword).toBe(true);
+      expect(res.user.profileStatus).toBe('INCOMPLETE');
+    });
+
+    it('login reports a null profile status for staff without a driver profile', async () => {
+      prisma.user.findUnique.mockResolvedValue(
+        await tempUser({ driverProfile: null, mustChangePassword: false }),
+      );
+      const res = await service.login({ serviceNumber: 'mod-new-1', password: 'Temp#Pass12' });
+      expect(res.user.mustChangePassword).toBe(false);
+      expect(res.user.profileStatus).toBeNull();
+    });
+
+    it('rejects an expired temporary password (after checking it is correct)', async () => {
+      prisma.user.findUnique.mockResolvedValue(
+        await tempUser({ tempPasswordExpiresAt: new Date(Date.now() - 1000) }),
+      );
+      await expect(
+        service.login({ serviceNumber: 'mod-new-1', password: 'Temp#Pass12' }),
+      ).rejects.toMatchObject({ response: { code: 'AUTH_TEMP_PASSWORD_EXPIRED' } });
+    });
+
+    it('a wrong password on an expired account still reads as invalid credentials', async () => {
+      prisma.user.findUnique.mockResolvedValue(
+        await tempUser({ tempPasswordExpiresAt: new Date(Date.now() - 1000) }),
+      );
+      await expect(
+        service.login({ serviceNumber: 'mod-new-1', password: 'wrong-pass1' }),
+      ).rejects.toMatchObject({ response: { code: 'AUTH_INVALID_CREDENTIALS' } });
+    });
+
+    it('changePassword stores the new hash, clears the flag and signs the user out', async () => {
+      prisma.user.findUnique.mockResolvedValue(await tempUser());
+      prisma.user.update.mockResolvedValue({});
+
+      const res = await service.changePassword(
+        'user-tmp',
+        { currentPassword: 'Temp#Pass12', newPassword: 'Brand-New9' },
+        'jwt-123',
+      );
+
+      expect(res).toEqual({ passwordChanged: true });
+      const data = prisma.user.update.mock.calls[0][0].data;
+      expect(data.mustChangePassword).toBe(false);
+      expect(data.tempPasswordExpiresAt).toBeNull();
+      expect(data.passwordChangedAt).toBeInstanceOf(Date);
+      expect(await bcrypt.compare('Brand-New9', data.passwordHash)).toBe(true);
+      // the current token is blacklisted so the user must log in again
+      expect(redis.set).toHaveBeenCalledWith('jwt_blacklist:jwt-123', '1', expect.any(Number));
+    });
+
+    it('changePassword rejects a wrong current password and changes nothing', async () => {
+      prisma.user.findUnique.mockResolvedValue(await tempUser());
+      await expect(
+        service.changePassword('user-tmp', { currentPassword: 'nope-nope1', newPassword: 'Brand-New9' }, 't'),
+      ).rejects.toMatchObject({ response: { code: 'AUTH_CURRENT_PASSWORD_INVALID' } });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('changePassword rejects reusing the current password', async () => {
+      prisma.user.findUnique.mockResolvedValue(await tempUser());
+      await expect(
+        service.changePassword('user-tmp', { currentPassword: 'Temp#Pass12', newPassword: 'Temp#Pass12' }, 't'),
+      ).rejects.toMatchObject({ response: { code: 'AUTH_PASSWORD_UNCHANGED' } });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
 });

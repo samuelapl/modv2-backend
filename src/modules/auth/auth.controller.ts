@@ -4,10 +4,12 @@ import { Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto, AuthenticatedUserDto } from './dto/auth-response.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuditMeta } from '../../common/decorators/audit.decorator';
+import { AllowWhenPasswordChangeRequired } from '../../common/decorators/allow-password-change.decorator';
 import { LoginRateLimitGuard } from '../../common/guards/login-rate-limit.guard';
 
 @ApiTags('Auth')
@@ -33,6 +35,7 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  @AllowWhenPasswordChangeRequired()
   @AuditMeta('USER_LOGOUT', 'User')
   @Post('logout')
   @HttpCode(HttpStatus.OK)
@@ -44,12 +47,31 @@ export class AuthController {
     return this.authService.logout(token);
   }
 
+  @AllowWhenPasswordChangeRequired()
   @Get('me')
   @ApiBearerAuth('JWT-auth')
   @ApiOperation({ summary: 'Retrieve authenticated user profile & resolved permissions' })
   @ApiOkResponse({ type: AuthenticatedUserDto })
   getMe(@CurrentUser('id') userId: string) {
     return this.authService.getProfile(userId);
+  }
+
+  @AllowWhenPasswordChangeRequired()
+  @AuditMeta('CHANGE_PASSWORD', 'User')
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('JWT-auth')
+  @ApiOperation({
+    summary:
+      'Change own password (required after an admin-issued temporary password). Signs the user out: log in again with the new password.',
+  })
+  changePassword(
+    @CurrentUser('id') userId: string,
+    @Body() dto: ChangePasswordDto,
+    @Req() req: Request,
+  ) {
+    const token = req.headers.authorization?.replace('Bearer ', '').trim() || '';
+    return this.authService.changePassword(userId, dto, token);
   }
 
   @Patch('me/preferences')

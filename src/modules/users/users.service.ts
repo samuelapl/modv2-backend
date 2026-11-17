@@ -3,6 +3,7 @@ import { SystemRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaginatedResult } from '../../common/dto/paginated-result.dto';
+import { generateTempPassword, tempPasswordExpiry } from '../../common/utils/password.util';
 import { PermissionResolverService } from '../../common/services/permission-resolver.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -50,9 +51,11 @@ const USER_SELECT = {
       id: true,
       fullName: true,
       personnelStatus: true,
+      profileStatus: true,
     },
   },
   isActive: true,
+  mustChangePassword: true,
   createdAt: true,
   updatedAt: true,
 };
@@ -156,9 +159,12 @@ export class UsersService {
     const normalizedUnitId = dto.unitId?.trim() || null;
     assertUnitAssigned(dto.roles, normalizedUnitId);
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    // Admin-issued passwords are temporary: the user must replace it on first login.
+    const generated = !dto.password;
+    const temporaryPassword = dto.password ?? generateTempPassword();
+    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
 
-    return this.prisma.user.create({
+    const created = await this.prisma.user.create({
       data: {
         serviceNumber: normalizedService,
         fullName: dto.fullName.trim(),
@@ -169,9 +175,41 @@ export class UsersService {
         roles: dto.roles,
         unitId: normalizedUnitId,
         customPermissions: dto.customPermissions || [],
+        mustChangePassword: true,
+        tempPasswordExpiresAt: tempPasswordExpiry(),
       },
       select: USER_SELECT,
     });
+
+    // The generated password is shown to the admin once and never stored in plain text.
+    return generated ? { ...created, temporaryPassword } : created;
+  }
+
+  /**
+   * Issues a new temporary password (returned once). The user must change it at
+   * next login; their existing sessions are blocked until they do.
+   */
+  async resetPassword(id: string, actorId: string) {
+    if (id === actorId) {
+      throw new AppBadRequestException(
+        'USERS_RESET_OWN_PASSWORD',
+        {},
+        'You cannot reset your own password here. Use change password instead.',
+      );
+    }
+    await this.findOne(id);
+
+    const temporaryPassword = generateTempPassword();
+    const expiresAt = tempPasswordExpiry();
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash: await bcrypt.hash(temporaryPassword, 10),
+        mustChangePassword: true,
+        tempPasswordExpiresAt: expiresAt,
+      },
+    });
+    return { temporaryPassword, expiresAt };
   }
 
   async update(id: string, dto: UpdateUserDto) {

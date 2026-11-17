@@ -545,6 +545,9 @@ async function main() {
           emergencyContactPhone: '+251911223399',
           unitId: logUnit.id,
           personnelStatus: PersonnelStatus.ACTIVE,
+          // Dev convenience: the demo driver can apply straight away (no photo to upload).
+          profileStatus: 'COMPLETE',
+          profileCompletedAt: new Date(),
         },
       },
     },

@@ -10,10 +10,16 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MinLength,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import {
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_PATTERN,
+  PASSWORD_POLICY_MESSAGE,
+} from '../../../common/utils/password.util';
 import { PriorPermitDto } from '../../applications/dto/prior-permit.dto';
 
 export const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] as const;
@@ -46,9 +52,14 @@ export class CreateDriverDto {
   @IsNotEmpty()
   nationalIdNumber?: string;
 
-  @ApiProperty({ example: '1995-03-10' })
+  @ApiPropertyOptional({
+    example: '1995-03-10',
+    description:
+      'Normally entered by the driver when completing their profile. Required here only when recording an existing permit (priorPermit).',
+  })
+  @IsOptional()
   @IsDateString()
-  dateOfBirth: string;
+  dateOfBirth?: string;
 
   @ApiPropertyOptional({ enum: BLOOD_GROUPS, example: 'O+' })
   @IsOptional()
@@ -60,16 +71,14 @@ export class CreateDriverDto {
   @IsString()
   photoUrl?: string;
 
-  @ApiPropertyOptional({ example: 'driver@mod.gov.et' })
-  @IsOptional()
-  @ValidateIf((o) => o.email !== '' && o.email !== null && o.email !== undefined)
+  @ApiProperty({ example: 'driver@mod.gov.et' })
   @IsEmail()
-  email?: string;
+  email: string;
 
-  @ApiPropertyOptional({ example: '+251911223344' })
-  @IsOptional()
+  @ApiProperty({ example: '+251911223344' })
   @IsString()
-  contactPhone?: string;
+  @IsNotEmpty()
+  contactPhone: string;
 
   @ApiPropertyOptional({ example: 'Almaz Bikila' })
   @IsOptional()
@@ -92,10 +101,15 @@ export class CreateDriverDto {
   @IsEnum(PersonnelStatus)
   personnelStatus?: PersonnelStatus;
 
-  @ApiPropertyOptional({ minLength: 8 })
+  @ApiPropertyOptional({
+    minLength: 8,
+    description:
+      'Temporary password. Omit to have the server generate one (returned once as temporaryPassword). The driver must change it on first login.',
+  })
   @IsOptional()
   @IsString()
-  @MinLength(8)
+  @MinLength(PASSWORD_MIN_LENGTH)
+  @Matches(PASSWORD_PATTERN, { message: PASSWORD_POLICY_MESSAGE })
   initialPassword?: string;
 
   @ApiPropertyOptional({

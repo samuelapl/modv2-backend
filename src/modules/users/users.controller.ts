@@ -7,6 +7,7 @@ import {
   Param,
   Body,
   Query,
+  Header,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { SystemRole } from '@prisma/client';
@@ -43,6 +44,7 @@ export class UsersController {
   }
 
   @Post()
+  @Header('Cache-Control', 'no-store')
   @AuditMeta('CREATE_USER', 'User', 'user')
   @RequirePermissions(Permission.USERS_MANAGE)
   @ApiOperation({ summary: 'Create internal MoD staff user account' })
@@ -99,6 +101,17 @@ export class UsersController {
   @ApiOperation({ summary: 'Update user roles, status, or delegated permissions' })
   update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
     return this.usersService.update(id, dto);
+  }
+
+  @Post(':id/reset-password')
+  @Header('Cache-Control', 'no-store')
+  @AuditMeta('RESET_USER_PASSWORD', 'User', 'user')
+  @RequirePermissions(Permission.USERS_MANAGE)
+  @ApiOperation({
+    summary: 'Issue a new temporary password (shown once); the user must change it at next login',
+  })
+  resetPassword(@Param('id') id: string, @CurrentUser('id') actorId: string) {
+    return this.usersService.resetPassword(id, actorId);
   }
 
   @Delete(':id')

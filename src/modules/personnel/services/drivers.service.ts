@@ -11,12 +11,20 @@ import {
   SystemRole,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { generateTempPassword, tempPasswordExpiry } from '../../../common/utils/password.util';
+import {
+  MIN_DRIVER_AGE,
+  calculateAge,
+  missingProfileFields,
+  profileStatusFor,
+} from '../helpers/profile-completeness.helper';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { PaginatedResult } from '../../../common/dto/paginated-result.dto';
 import { Permission } from '../../../common/enums/permissions.enum';
 import { CreateDriverDto } from '../dto/create-driver.dto';
 import { BulkCreateDriversDto } from '../dto/bulk-create-drivers.dto';
 import { UpdateDriverDto } from '../dto/update-driver.dto';
+import { UpdateMyProfileDto } from '../dto/update-my-profile.dto';
 import { QueryDriversDto } from '../dto/query-drivers.dto';
 import { OPEN_APPLICATION_STATUSES } from '../../applications/helpers/application-state.helper';
 import {
@@ -33,16 +41,6 @@ export interface RequestUserContext {
   serviceNumber: string;
   unitId: string | null;
   resolvedPermissions?: string[];
-}
-
-function calculateAge(dob: Date): number {
-  const today = new Date();
-  let age = today.getFullYear() - dob.getFullYear();
-  const m = today.getMonth() - dob.getMonth();
-  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) {
-    age--;
-  }
-  return age;
 }
 
 @Injectable()
@@ -230,15 +228,7 @@ export class DriversService {
   async create(dto: CreateDriverDto, user: RequestUserContext) {
     const perms = new Set(user.resolvedPermissions || []);
     const normalizedService = dto.serviceNumber.trim().toUpperCase();
-    const dob = new Date(dto.dateOfBirth);
-
-    if (Number.isNaN(dob.getTime()) || calculateAge(dob) < 18) {
-      throw new AppBadRequestException(
-        'DRIVER_UNDERAGE',
-        {},
-        'Driver must be at least 18 years old.',
-      );
-    }
+    const dob = this.parseOptionalDob(dto);
 
     if (
       !perms.has(Permission.DRIVERS_VIEW_ALL) &&
@@ -316,22 +306,55 @@ export class DriversService {
       prior = resolvePriorPermit(dto.priorPermit, dob, lookup);
     }
 
-    const passwordHash = await bcrypt.hash(
-      dto.initialPassword || 'MoD@2026!',
-      10,
+    // No shared default password: an omitted one is generated and shown once.
+    const generated = !dto.initialPassword;
+    const temporaryPassword = dto.initialPassword ?? generateTempPassword();
+    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+
+    const { driver, accountCreated } = await this.runDriverTransaction(
+      prior,
+      (tx, attempt) =>
+        this.createDriverRecordInTx(
+          tx,
+          dto,
+          normalizedService,
+          normalizedNationalId,
+          dob,
+          passwordHash,
+          prior ? { prior, createdById: user.id, attempt } : null,
+        ),
     );
 
-    return this.runDriverTransaction(prior, (tx, attempt) =>
-      this.createDriverRecordInTx(
-        tx,
-        dto,
-        normalizedService,
-        normalizedNationalId,
-        dob,
-        passwordHash,
-        prior ? { prior, createdById: user.id, attempt } : null,
-      ),
-    );
+    // An existing account (e.g. a staff user now registered as a driver) keeps
+    // its own password, so there is no temporary password to hand over.
+    return generated && accountCreated ? { ...driver, temporaryPassword } : driver;
+  }
+
+  /**
+   * Date of birth is entered by the driver during profile completion, so it is
+   * optional here. It is mandatory only when an existing permit is recorded,
+   * because the permit's age rules need it.
+   */
+  private parseOptionalDob(dto: CreateDriverDto): Date | null {
+    if (!dto.dateOfBirth) {
+      if (dto.priorPermit) {
+        throw new AppBadRequestException(
+          'DRIVER_DOB_REQUIRED_FOR_PRIOR_PERMIT',
+          {},
+          'Date of birth is required when recording an existing permit.',
+        );
+      }
+      return null;
+    }
+    const dob = new Date(dto.dateOfBirth);
+    if (Number.isNaN(dob.getTime()) || calculateAge(dob) < MIN_DRIVER_AGE) {
+      throw new AppBadRequestException(
+        'DRIVER_UNDERAGE',
+        {},
+        'Driver must be at least 18 years old.',
+      );
+    }
+    return dob;
   }
 
   async bulkCreate(dto: BulkCreateDriversDto, user: RequestUserContext) {
@@ -418,6 +441,8 @@ export class DriversService {
       error?: string;
       driver?: any;
       application?: { id: string; applicationNumber: string; status: string };
+      /** Only present when the server generated it; shown once, never stored. */
+      temporaryPassword?: string;
     }> = [];
 
     for (let i = 0; i < dto.drivers.length; i++) {
@@ -428,14 +453,7 @@ export class DriversService {
       const normalizedEmail = item.email?.trim().toLowerCase() || null;
 
       try {
-        const dob = new Date(item.dateOfBirth);
-        if (Number.isNaN(dob.getTime()) || calculateAge(dob) < 18) {
-          throw new AppBadRequestException(
-            'DRIVER_UNDERAGE',
-            {},
-            'Driver must be at least 18 years old.',
-          );
-        }
+        const dob = this.parseOptionalDob(item);
 
         if (!validUnitSet.has(item.unitId)) {
           throw new AppBadRequestException(
@@ -483,28 +501,33 @@ export class DriversService {
         }
 
         const prior =
-          item.priorPermit && priorLookup
+          item.priorPermit && priorLookup && dob
             ? resolvePriorPermit(item.priorPermit, dob, priorLookup)
             : null;
 
-        const rawPassword = item.initialPassword || 'MoD@2026!';
-        let passwordHash = passwordHashCache.get(rawPassword);
+        // Each row without a supplied password gets its own random temporary one.
+        const generated = !item.initialPassword;
+        const rawPassword = item.initialPassword ?? generateTempPassword();
+        let passwordHash = generated
+          ? undefined
+          : passwordHashCache.get(rawPassword);
         if (!passwordHash) {
           passwordHash = await bcrypt.hash(rawPassword, 10);
-          passwordHashCache.set(rawPassword, passwordHash);
+          if (!generated) passwordHashCache.set(rawPassword, passwordHash);
         }
 
-        const created = await this.runDriverTransaction(prior, (tx, attempt) =>
-          this.createDriverRecordInTx(
-            tx,
-            item,
-            normalizedService,
-            normalizedNationalId,
-            dob,
-            passwordHash!,
-            prior ? { prior, createdById: user.id, attempt } : null,
-          ),
-        );
+        const { driver: created, accountCreated } =
+          await this.runDriverTransaction(prior, (tx, attempt) =>
+            this.createDriverRecordInTx(
+              tx,
+              item,
+              normalizedService,
+              normalizedNationalId,
+              dob,
+              passwordHash!,
+              prior ? { prior, createdById: user.id, attempt } : null,
+            ),
+          );
 
         batchServiceSet.add(normalizedService);
         if (prior && priorLookup) {
@@ -524,6 +547,8 @@ export class DriversService {
           status: 'CREATED',
           driver: created,
           application: created.preTrainedApplication ?? undefined,
+          temporaryPassword:
+            generated && accountCreated ? rawPassword : undefined,
         });
       } catch (err: any) {
         results.push({
@@ -582,7 +607,7 @@ export class DriversService {
     dto: CreateDriverDto,
     normalizedService: string,
     normalizedNationalId: string | null,
-    dob: Date,
+    dob: Date | null,
     passwordHash: string,
     preTrained: {
       prior: ResolvedPriorPermit;
@@ -594,6 +619,7 @@ export class DriversService {
     let existingUser = await tx.user.findUnique({
       where: { serviceNumber: normalizedService },
     });
+    const accountCreated = !existingUser;
 
     if (!existingUser) {
       existingUser = await tx.user.create({
@@ -607,6 +633,8 @@ export class DriversService {
           roles: [SystemRole.STAFF_DRIVER],
           unitId: dto.unitId,
           isActive: true,
+          mustChangePassword: true,
+          tempPasswordExpiresAt: tempPasswordExpiry(),
         },
       });
     } else if (normalizedEmail && existingUser.email !== normalizedEmail) {
@@ -615,6 +643,16 @@ export class DriversService {
         data: { email: normalizedEmail },
       });
     }
+
+    const profileStatus = profileStatusFor({
+      dateOfBirth: dob,
+      gender: dto.gender,
+      nationalIdNumber: normalizedNationalId,
+      bloodGroup: dto.bloodGroup,
+      photoUrl: dto.photoUrl,
+      emergencyContactName: dto.emergencyContactName?.trim() || null,
+      emergencyContactPhone: dto.emergencyContactPhone?.trim() || null,
+    });
 
     const driver = await tx.driverProfile.create({
       data: {
@@ -632,6 +670,8 @@ export class DriversService {
         emergencyContactPhone: dto.emergencyContactPhone?.trim() || null,
         unitId: dto.unitId,
         personnelStatus: dto.personnelStatus,
+        profileStatus,
+        profileCompletedAt: profileStatus === 'COMPLETE' ? new Date() : null,
       },
       include: {
         unit: { select: { id: true, code: true, name: true } },
@@ -640,7 +680,7 @@ export class DriversService {
     });
 
     if (!preTrained) {
-      return driver;
+      return { driver, accountCreated };
     }
 
     const preTrainedApplication = await createPreTrainedApplicationInTx(tx, {
@@ -653,7 +693,46 @@ export class DriversService {
       ),
     });
 
-    return { ...driver, preTrainedApplication };
+    return { driver: { ...driver, preTrainedApplication }, accountCreated };
+  }
+
+  /** The signed-in driver's own profile, plus which required fields are still empty. */
+  async findMine(userId: string) {
+    const profile = await this.prisma.driverProfile.findUnique({
+      where: { userId },
+      include: {
+        unit: { select: { id: true, code: true, name: true } },
+        user: { select: { id: true, email: true, phone: true } },
+      },
+    });
+    if (!profile) {
+      throw new AppNotFoundException(
+        'DRIVER_NOT_FOUND',
+        {},
+        'Driver profile not found.',
+      );
+    }
+    return { ...profile, missingFields: missingProfileFields(profile) };
+  }
+
+  /**
+   * Self-service profile completion. The DTO whitelists what a driver may edit;
+   * everything else (name, rank, unit, status) stays admin-only.
+   */
+  async updateMine(userId: string, dto: UpdateMyProfileDto) {
+    const profile = await this.prisma.driverProfile.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+    if (!profile) {
+      throw new AppNotFoundException(
+        'DRIVER_NOT_FOUND',
+        {},
+        'Driver profile not found.',
+      );
+    }
+    const updated = await this.update(profile.id, dto);
+    return { ...updated, missingFields: missingProfileFields(updated) };
   }
 
   async update(id: string, dto: UpdateDriverDto) {
@@ -687,6 +766,18 @@ export class DriversService {
       }
     }
 
+    let dob: Date | undefined;
+    if (dto.dateOfBirth !== undefined) {
+      dob = new Date(dto.dateOfBirth);
+      if (Number.isNaN(dob.getTime()) || calculateAge(dob) < MIN_DRIVER_AGE) {
+        throw new AppBadRequestException(
+          'DRIVER_UNDERAGE',
+          {},
+          'Driver must be at least 18 years old.',
+        );
+      }
+    }
+
     const normalizedEmail =
       dto.email !== undefined
         ? dto.email.trim().toLowerCase() || null
@@ -706,42 +797,152 @@ export class DriversService {
       }
     }
 
-    if (normalizedEmail !== undefined && existing.userId) {
+    const normalizedContactPhone =
+      dto.contactPhone !== undefined
+        ? dto.contactPhone.trim() || null
+        : undefined;
+
+    // The account's email/phone are the same contact details, keep them in step.
+    if (
+      existing.userId &&
+      (normalizedEmail !== undefined || normalizedContactPhone !== undefined)
+    ) {
       await this.prisma.user.update({
         where: { id: existing.userId },
-        data: { email: normalizedEmail },
+        data: {
+          ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
+          ...(normalizedContactPhone !== undefined
+            ? { phone: normalizedContactPhone }
+            : {}),
+        },
       });
     }
+
+    const data = {
+      fullName: dto.fullName?.trim(),
+      rank: dto.rank !== undefined ? dto.rank.trim() || null : undefined,
+      gender: dto.gender,
+      nationalIdNumber: normalizedNationalId,
+      dateOfBirth: dob,
+      bloodGroup: dto.bloodGroup,
+      photoUrl: dto.photoUrl,
+      contactPhone: normalizedContactPhone,
+      emergencyContactName:
+        dto.emergencyContactName !== undefined
+          ? dto.emergencyContactName.trim() || null
+          : undefined,
+      emergencyContactPhone:
+        dto.emergencyContactPhone !== undefined
+          ? dto.emergencyContactPhone.trim() || null
+          : undefined,
+      unitId: dto.unitId,
+      personnelStatus: dto.personnelStatus,
+    };
+
+    // Changing a field the identity check was based on voids that verification.
+    const identityChanged =
+      (normalizedNationalId !== undefined &&
+        normalizedNationalId !== existing.nationalIdNumber) ||
+      (dob !== undefined &&
+        dob.getTime() !== existing.dateOfBirth?.getTime());
+
+    // Recompute completeness from the values the profile will hold afterwards.
+    const merged = {
+      dateOfBirth: data.dateOfBirth ?? existing.dateOfBirth,
+      gender: data.gender ?? existing.gender,
+      nationalIdNumber:
+        data.nationalIdNumber !== undefined
+          ? data.nationalIdNumber
+          : existing.nationalIdNumber,
+      bloodGroup: data.bloodGroup ?? existing.bloodGroup,
+      photoUrl: data.photoUrl ?? existing.photoUrl,
+      emergencyContactName:
+        data.emergencyContactName !== undefined
+          ? data.emergencyContactName
+          : existing.emergencyContactName,
+      emergencyContactPhone:
+        data.emergencyContactPhone !== undefined
+          ? data.emergencyContactPhone
+          : existing.emergencyContactPhone,
+    };
+    const profileStatus = profileStatusFor(merged);
 
     return this.prisma.driverProfile.update({
       where: { id },
       data: {
-        fullName: dto.fullName?.trim(),
-        rank: dto.rank !== undefined ? dto.rank.trim() || null : undefined,
-        gender: dto.gender,
-        nationalIdNumber: normalizedNationalId,
-        bloodGroup: dto.bloodGroup,
-        photoUrl: dto.photoUrl,
-        contactPhone:
-          dto.contactPhone !== undefined
-            ? dto.contactPhone.trim() || null
-            : undefined,
-        emergencyContactName:
-          dto.emergencyContactName !== undefined
-            ? dto.emergencyContactName.trim() || null
-            : undefined,
-        emergencyContactPhone:
-          dto.emergencyContactPhone !== undefined
-            ? dto.emergencyContactPhone.trim() || null
-            : undefined,
-        unitId: dto.unitId,
-        personnelStatus: dto.personnelStatus,
+        ...data,
+        profileStatus,
+        profileCompletedAt:
+          profileStatus === 'COMPLETE'
+            ? existing.profileCompletedAt ?? new Date()
+            : null,
+        ...(identityChanged && existing.identityVerifiedAt
+          ? { identityVerifiedAt: null, identityVerifiedBy: null }
+          : {}),
       },
       include: {
         unit: { select: { id: true, code: true, name: true } },
         user: { select: { id: true, email: true, phone: true } },
       },
     });
+  }
+
+  /**
+   * Issues a new temporary password for a driver's account (returned once).
+   * Unit coordinators can only do this for drivers in their own unit.
+   */
+  async resetPassword(id: string, actor: RequestUserContext) {
+    const perms = new Set(actor.resolvedPermissions || []);
+    const driver = await this.prisma.driverProfile.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        userId: true,
+        unitId: true,
+        user: { select: { roles: true } },
+      },
+    });
+    if (!driver) {
+      throw new AppNotFoundException(
+        'DRIVER_NOT_FOUND',
+        {},
+        'Driver profile not found.',
+      );
+    }
+    // A unit-scoped officer must not be able to take over a colleague's
+    // staff/admin account just because that person is also a registered driver.
+    const holdsOtherRoles = driver.user.roles.some(
+      (r) => r !== SystemRole.STAFF_DRIVER,
+    );
+    if (
+      !perms.has(Permission.DRIVERS_VIEW_ALL) &&
+      ((actor.unitId && driver.unitId !== actor.unitId) || holdsOtherRoles)
+    ) {
+      throw new AppForbiddenException(
+        'DRIVER_OUTSIDE_UNIT_SCOPE',
+        {},
+        'Access denied: Driver outside your unit scope.',
+      );
+    }
+    if (driver.userId === actor.id) {
+      throw new AppBadRequestException(
+        'USERS_RESET_OWN_PASSWORD',
+        {},
+        'You cannot reset your own password here. Use change password instead.',
+      );
+    }
+
+    const temporaryPassword = generateTempPassword();
+    const expiresAt = tempPasswordExpiry();
+    await this.prisma.user.update({
+      where: { id: driver.userId },
+      data: {
+        passwordHash: await bcrypt.hash(temporaryPassword, 10),
+        mustChangePassword: true,
+        tempPasswordExpiresAt: expiresAt,
+      },
+    });
+    return { temporaryPassword, expiresAt };
   }
 
   /**

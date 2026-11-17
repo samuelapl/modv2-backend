@@ -21,6 +21,11 @@ describe('DriversService', () => {
         findUnique: jest.fn(),
         update: jest.fn(),
       },
+      user: {
+        findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+      },
       $transaction: jest.fn(),
     };
 
@@ -40,6 +45,8 @@ describe('DriversService', () => {
         {
           serviceNumber: 'MOD-YOUNG',
           fullName: 'Young Recruit',
+          email: 'driver1@mod.gov.et',
+          contactPhone: '+251911000001',
           dateOfBirth: youngDob.toISOString(),
           unitId: 'unit-1',
         },
@@ -59,6 +66,8 @@ describe('DriversService', () => {
         {
           serviceNumber: 'MOD-CROSS',
           fullName: 'Sgt. Cross',
+          email: 'driver2@mod.gov.et',
+          contactPhone: '+251911000002',
           dateOfBirth: '1995-01-01',
           unitId: 'unit-OTHER',
         },
@@ -81,6 +90,8 @@ describe('DriversService', () => {
         {
           serviceNumber: 'MOD-88219',
           fullName: 'Duplicate Soldier',
+          email: 'driver3@mod.gov.et',
+          contactPhone: '+251911000003',
           dateOfBirth: '1995-01-01',
           unitId: 'unit-1',
         },
@@ -126,6 +137,7 @@ describe('DriversService', () => {
         {
           serviceNumber: 'MOD-88299',
           fullName: 'Sgt. Tesfaye',
+          email: 'driver4@mod.gov.et',
           rank: 'Sergeant',
           gender: 'MALE',
           nationalIdNumber: 'FAN-123456',
@@ -172,6 +184,7 @@ describe('DriversService', () => {
       {
         serviceNumber: ' mod-77001 ',
         fullName: 'Sgt. Abebe Bikila',
+        email: 'driver5@mod.gov.et',
         rank: 'Sergeant',
         gender: 'MALE',
         nationalIdNumber: ' fan-77001 ',
@@ -192,6 +205,9 @@ describe('DriversService', () => {
     );
 
     expect(created.nationalIdNumber).toBe('FAN-77001');
+    // No password supplied: a random one is generated and returned once.
+    expect((created as any).temporaryPassword).toEqual(expect.any(String));
+    expect((created as any).temporaryPassword).not.toBe('MoD@2026!');
     expect(txUserCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -199,6 +215,8 @@ describe('DriversService', () => {
           fullName: 'Sgt. Abebe Bikila',
           rank: 'Sergeant',
           phone: '+251911223344',
+          mustChangePassword: true,
+          tempPasswordExpiresAt: expect.any(Date),
         }),
       }),
     );
@@ -275,6 +293,8 @@ describe('DriversService', () => {
       id: 'drv-bulk-1',
       serviceNumber: 'MOD-BULK-1',
       fullName: 'Cpl. Kebede',
+      email: 'driver7@mod.gov.et',
+      contactPhone: '+251911000007',
     });
 
     prisma.$transaction.mockImplementation(async (cb: any) =>
@@ -292,6 +312,8 @@ describe('DriversService', () => {
           {
             serviceNumber: 'MOD-BULK-1',
             fullName: 'Cpl. Kebede',
+            email: 'driver8@mod.gov.et',
+            contactPhone: '+251911000008',
             dateOfBirth: '1994-05-12',
             unitId: 'unit-1',
             initialPassword: 'CustomPass@2026',
@@ -299,12 +321,16 @@ describe('DriversService', () => {
           {
             serviceNumber: 'MOD-EXISTS',
             fullName: 'Already Registered',
+            email: 'driver9@mod.gov.et',
+            contactPhone: '+251911000009',
             dateOfBirth: '1992-01-01',
             unitId: 'unit-1',
           },
           {
             serviceNumber: 'MOD-YOUNG',
             fullName: 'Too Young',
+            email: 'driver10@mod.gov.et',
+            contactPhone: '+251911000010',
             dateOfBirth: `${youngYear}-01-01`,
             unitId: 'unit-1',
           },
@@ -362,6 +388,8 @@ describe('DriversService', () => {
               {
                 serviceNumber: 'MOD-PT-1',
                 fullName: 'Sgt. Pre Trained',
+                email: 'driver11@mod.gov.et',
+                contactPhone: '+251911000011',
                 dateOfBirth: '1990-01-01',
                 unitId: 'unit-1',
                 priorPermit: prior('MOD-P-1'),
@@ -408,6 +436,8 @@ describe('DriversService', () => {
             {
               serviceNumber: 'MOD-PT-1',
               fullName: 'Sgt. Pre Trained',
+              email: 'driver12@mod.gov.et',
+              contactPhone: '+251911000012',
               dateOfBirth: '1990-01-01',
               unitId: 'unit-1',
               priorPermit: prior('mod-p-1'),
@@ -415,6 +445,8 @@ describe('DriversService', () => {
             {
               serviceNumber: 'MOD-PT-2',
               fullName: 'Cpl. Same Permit',
+              email: 'driver13@mod.gov.et',
+              contactPhone: '+251911000013',
               dateOfBirth: '1991-01-01',
               unitId: 'unit-1',
               priorPermit: prior('MOD-P-1'),
@@ -440,6 +472,280 @@ describe('DriversService', () => {
           data: expect.objectContaining({ action: 'CREATE_PRE_TRAINED_APPLICATION' }),
         }),
       );
+    });
+  });
+  describe('lean registration and profile completion', () => {
+    const admin = {
+      id: 'admin-1',
+      serviceNumber: 'MOD-ADMIN-001',
+      unitId: 'unit-1',
+      resolvedPermissions: [Permission.DRIVERS_VIEW_ALL, Permission.DRIVERS_UPDATE],
+    };
+    const lean = {
+      serviceNumber: 'MOD-LEAN-1',
+      fullName: 'Pvt. Lean',
+      rank: 'Private',
+      email: 'lean@mod.gov.et',
+      contactPhone: '+251911000111',
+      unitId: 'unit-1',
+    };
+
+    const mockCreateTx = () => {
+      const txUserCreate = jest.fn().mockResolvedValue({ id: 'user-lean' });
+      const txDriverCreate = jest
+        .fn()
+        .mockImplementation(async ({ data }: any) => ({ id: 'drv-lean', ...data }));
+      prisma.organizationalUnit.findUnique.mockResolvedValue({ id: 'unit-1' });
+      prisma.driverProfile.findUnique.mockResolvedValue(null);
+      prisma.$transaction.mockImplementation(async (cb: any) =>
+        cb({
+          user: { findUnique: jest.fn().mockResolvedValue(null), create: txUserCreate },
+          driverProfile: { create: txDriverCreate },
+        }),
+      );
+      return { txUserCreate, txDriverCreate };
+    };
+
+    it('registers a basic account without DOB: profile starts INCOMPLETE, password must be changed', async () => {
+      const { txUserCreate, txDriverCreate } = mockCreateTx();
+
+      const created: any = await service.create(lean, admin);
+
+      expect(created.temporaryPassword).toEqual(expect.any(String));
+      expect(created.temporaryPassword.length).toBeGreaterThanOrEqual(8);
+      expect(txUserCreate.mock.calls[0][0].data).toEqual(
+        expect.objectContaining({ mustChangePassword: true }),
+      );
+      const data = txDriverCreate.mock.calls[0][0].data;
+      expect(data.dateOfBirth).toBeNull();
+      expect(data.profileStatus).toBe('INCOMPLETE');
+      expect(data.profileCompletedAt).toBeNull();
+    });
+
+    it('does not return a temporary password when the admin supplied one', async () => {
+      mockCreateTx();
+      const created: any = await service.create(
+        { ...lean, initialPassword: 'Chosen#2026' },
+        admin,
+      );
+      expect(created.temporaryPassword).toBeUndefined();
+    });
+
+    it('marks the profile COMPLETE when every required field is supplied', async () => {
+      const { txDriverCreate } = mockCreateTx();
+      await service.create(
+        {
+          ...lean,
+          gender: 'MALE',
+          nationalIdNumber: 'FAN-1',
+          dateOfBirth: '1995-03-10',
+          bloodGroup: 'O+',
+          photoUrl: 'p.jpg',
+          emergencyContactName: 'Almaz',
+          emergencyContactPhone: '+251911887766',
+        },
+        admin,
+      );
+      expect(txDriverCreate.mock.calls[0][0].data.profileStatus).toBe('COMPLETE');
+    });
+
+    it('requires DOB only when an existing permit is recorded', async () => {
+      await expect(
+        service.create(
+          {
+            ...lean,
+            priorPermit: {
+              categoryCodes: ['CAT-LV'],
+              permitNumber: 'P-1',
+              issueDate: '2024-01-01',
+              expiryDate: '2099-01-01',
+            },
+          },
+          { ...admin, resolvedPermissions: [...admin.resolvedPermissions, Permission.APPLICATIONS_CREATE] },
+        ),
+      ).rejects.toThrow(/Date of birth is required/);
+    });
+
+    it('bulk rows each get their own generated temporary password', async () => {
+      prisma.organizationalUnit.findMany.mockResolvedValue([{ id: 'unit-1' }]);
+      prisma.driverProfile.findMany.mockResolvedValue([]);
+      prisma.$transaction.mockImplementation(async (cb: any) =>
+        cb({
+          user: {
+            findUnique: jest.fn().mockResolvedValue(null),
+            create: jest.fn().mockResolvedValue({ id: 'u' }),
+          },
+          driverProfile: {
+            create: jest.fn().mockImplementation(async ({ data }: any) => ({ id: 'd', ...data })),
+          },
+        }),
+      );
+
+      const summary = await service.bulkCreate(
+        {
+          drivers: [
+            { ...lean, serviceNumber: 'MOD-B-1', email: 'b1@mod.gov.et' },
+            { ...lean, serviceNumber: 'MOD-B-2', email: 'b2@mod.gov.et' },
+          ],
+        },
+        admin,
+      );
+
+      expect(summary.createdCount).toBe(2);
+      const [a, b] = summary.results.map((r) => r.temporaryPassword);
+      expect(a).toEqual(expect.any(String));
+      expect(b).toEqual(expect.any(String));
+      expect(a).not.toBe(b);
+    });
+
+    describe('update / self-service completion', () => {
+      const incomplete = {
+        id: 'drv-1',
+        userId: 'user-1',
+        nationalIdNumber: null,
+        dateOfBirth: null,
+        gender: null,
+        bloodGroup: null,
+        photoUrl: null,
+        emergencyContactName: null,
+        emergencyContactPhone: null,
+        profileStatus: 'INCOMPLETE',
+        profileCompletedAt: null,
+        identityVerifiedAt: null,
+      };
+
+      it('flips to COMPLETE once the last required field arrives', async () => {
+        prisma.driverProfile.findUnique
+          .mockResolvedValueOnce({
+            ...incomplete,
+            dateOfBirth: new Date('1995-03-10'),
+            gender: 'MALE',
+            nationalIdNumber: 'FAN-1',
+            bloodGroup: 'O+',
+            emergencyContactName: 'Almaz',
+            emergencyContactPhone: '+251911887766',
+          }) // existing row, only the photo is missing
+          .mockResolvedValue(null); // national-id duplicate lookup
+        prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
+
+        await service.update('drv-1', { photoUrl: 'me.jpg' });
+
+        const data = prisma.driverProfile.update.mock.calls[0][0].data;
+        expect(data.profileStatus).toBe('COMPLETE');
+        expect(data.profileCompletedAt).toBeInstanceOf(Date);
+      });
+
+      it('rejects a self-entered DOB under 18', async () => {
+        prisma.driverProfile.findUnique.mockResolvedValue(incomplete);
+        const young = new Date();
+        young.setFullYear(young.getFullYear() - 16);
+        await expect(
+          service.update('drv-1', { dateOfBirth: young.toISOString() }),
+        ).rejects.toThrow(BadRequestException);
+      });
+
+      it('voids identity verification when the national ID changes', async () => {
+        prisma.driverProfile.findUnique
+          .mockResolvedValueOnce({
+            ...incomplete,
+            nationalIdNumber: 'FAN-OLD',
+            identityVerifiedAt: new Date(),
+            identityVerifiedBy: 'MOD-LIC-001',
+          })
+          .mockResolvedValue(null);
+        prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
+
+        await service.update('drv-1', { nationalIdNumber: 'fan-new' });
+
+        const data = prisma.driverProfile.update.mock.calls[0][0].data;
+        expect(data.identityVerifiedAt).toBeNull();
+        expect(data.identityVerifiedBy).toBeNull();
+      });
+
+      it('keeps identity verification when an unrelated field changes', async () => {
+        prisma.driverProfile.findUnique.mockResolvedValueOnce({
+          ...incomplete,
+          identityVerifiedAt: new Date(),
+        });
+        prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
+
+        await service.update('drv-1', { bloodGroup: 'A+' });
+
+        expect(prisma.driverProfile.update.mock.calls[0][0].data).not.toHaveProperty('identityVerifiedAt');
+      });
+
+      it('updateMine looks the profile up by the signed-in user, not by a client-sent id', async () => {
+        prisma.driverProfile.findUnique
+          .mockResolvedValueOnce({ id: 'drv-1' }) // lookup by userId
+          .mockResolvedValueOnce(incomplete) // update(): existing
+          .mockResolvedValue(null);
+        prisma.driverProfile.update.mockImplementation(async ({ data }: any) => ({ id: 'drv-1', ...data }));
+
+        const res: any = await service.updateMine('user-1', { bloodGroup: 'B+' });
+
+        expect(prisma.driverProfile.findUnique.mock.calls[0][0]).toEqual(
+          expect.objectContaining({ where: { userId: 'user-1' } }),
+        );
+        expect(res.missingFields).toContain('photoUrl');
+      });
+
+      it('updateMine fails for an account without a driver profile', async () => {
+        prisma.driverProfile.findUnique.mockResolvedValue(null);
+        await expect(service.updateMine('staff-1', { bloodGroup: 'B+' })).rejects.toThrow(/not found/i);
+      });
+    });
+
+    describe('resetPassword', () => {
+      it('issues a new temporary password and forces a change', async () => {
+        prisma.driverProfile.findUnique.mockResolvedValue({
+          id: 'drv-1',
+          userId: 'user-1',
+          unitId: 'unit-1',
+          user: { roles: ['STAFF_DRIVER'] },
+        });
+        const res = await service.resetPassword('drv-1', admin);
+
+        expect(res.temporaryPassword.length).toBeGreaterThanOrEqual(8);
+        expect(prisma.user.update.mock.calls[0][0].data).toEqual(
+          expect.objectContaining({ mustChangePassword: true }),
+        );
+      });
+
+      it('lets a unit coordinator reset only plain drivers of their own unit', async () => {
+        const coordinator = {
+          id: 'coord-1',
+          serviceNumber: 'C-1',
+          unitId: 'unit-1',
+          resolvedPermissions: [Permission.DRIVERS_VIEW_UNIT, Permission.DRIVERS_UPDATE],
+        };
+        prisma.driverProfile.findUnique.mockResolvedValue({
+          id: 'drv-2',
+          userId: 'user-2',
+          unitId: 'unit-2',
+          user: { roles: ['STAFF_DRIVER'] },
+        });
+        await expect(service.resetPassword('drv-2', coordinator)).rejects.toThrow(ForbiddenException);
+
+        // same unit, but the person is also an examiner: not theirs to reset
+        prisma.driverProfile.findUnique.mockResolvedValue({
+          id: 'drv-3',
+          userId: 'user-3',
+          unitId: 'unit-1',
+          user: { roles: ['STAFF_DRIVER', 'EXAMINER'] },
+        });
+        await expect(service.resetPassword('drv-3', coordinator)).rejects.toThrow(ForbiddenException);
+        expect(prisma.user.update).not.toHaveBeenCalled();
+      });
+
+      it('refuses to reset your own password', async () => {
+        prisma.driverProfile.findUnique.mockResolvedValue({
+          id: 'drv-1',
+          userId: 'admin-1',
+          unitId: 'unit-1',
+          user: { roles: ['STAFF_DRIVER'] },
+        });
+        await expect(service.resetPassword('drv-1', admin)).rejects.toThrow(BadRequestException);
+      });
     });
   });
 });

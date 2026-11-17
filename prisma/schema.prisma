@@ -57,6 +57,11 @@ model User {
   mfaSecret         String?
   isActive          Boolean             @default(true)
   preferredLocale   String              @default("en") // Interface language: "en" | "am"
+
+  // Onboarding: admin-issued accounts must set their own password on first login.
+  mustChangePassword    Boolean   @default(false)
+  passwordChangedAt     DateTime?
+  tempPasswordExpiresAt DateTime? // set while mustChangePassword is true; login refused after it passes
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
@@ -111,7 +116,7 @@ model DriverProfile {
   rank                  String?
   gender                Gender?
   nationalIdNumber      String?            @unique
-  dateOfBirth           DateTime
+  dateOfBirth           DateTime? // optional until the driver completes their profile
   bloodGroup            String?
   photoUrl              String? // Object storage key
   contactPhone          String?
@@ -122,6 +127,8 @@ model DriverProfile {
   personnelStatus       PersonnelStatus    @default(ACTIVE)
   identityVerifiedAt    DateTime?
   identityVerifiedBy    String?
+  profileStatus         ProfileStatus      @default(INCOMPLETE)
+  profileCompletedAt    DateTime?
 
   nationalLicense   NationalLicense?
   applications      Application[]
@@ -137,6 +144,11 @@ model DriverProfile {
 
   @@index([serviceNumber])
   @@index([fullName])
+}
+
+enum ProfileStatus {
+  INCOMPLETE
+  COMPLETE
 }
 
 enum VerificationStatus {

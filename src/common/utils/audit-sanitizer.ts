@@ -1,6 +1,10 @@
 const REDACTED_KEYS = new Set([
   'password',
   'passwordhash',
+  'currentpassword',
+  'newpassword',
+  'initialpassword',
+  'temporarypassword',
   'accesstoken',
   'refreshtoken',
   'token',

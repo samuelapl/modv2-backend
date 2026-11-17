@@ -7,8 +7,9 @@ import { RedisService } from '../../redis/redis.service';
 import { PermissionResolverService } from '../../common/services/permission-resolver.service';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto, AuthenticatedUserDto } from './dto/auth-response.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
-import { AppUnauthorizedException } from '../../common/errors';
+import { AppBadRequestException, AppUnauthorizedException } from '../../common/errors';
 
 @Injectable()
 export class AuthService {
@@ -32,6 +33,7 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { serviceNumber: normalizedServiceNumber },
+      include: { driverProfile: { select: { profileStatus: true } } },
     });
 
     if (!user || !user.isActive) {
@@ -43,6 +45,18 @@ export class AuthService {
     if (!passwordValid) {
       throw new AppUnauthorizedException(
       'AUTH_INVALID_CREDENTIALS', {}, 'Invalid credentials.');
+    }
+
+    if (
+      user.mustChangePassword &&
+      user.tempPasswordExpiresAt &&
+      user.tempPasswordExpiresAt.getTime() < Date.now()
+    ) {
+      throw new AppUnauthorizedException(
+        'AUTH_TEMP_PASSWORD_EXPIRED',
+        {},
+        'Your temporary password has expired. Ask an administrator to reset it.',
+      );
     }
 
     const permissions = await this.permissionResolver.resolveUserPermissions(
@@ -71,6 +85,8 @@ export class AuthService {
         unitId: user.unitId,
         permissions,
         preferredLocale: user.preferredLocale,
+        mustChangePassword: user.mustChangePassword,
+        profileStatus: user.driverProfile?.profileStatus ?? null,
       },
     };
   }
@@ -103,6 +119,8 @@ export class AuthService {
         unitId: true,
         isActive: true,
         preferredLocale: true,
+        mustChangePassword: true,
+        driverProfile: { select: { profileStatus: true } },
       },
     });
 
@@ -127,7 +145,54 @@ export class AuthService {
       unitId: user.unitId,
       permissions,
       preferredLocale: user.preferredLocale,
+      mustChangePassword: user.mustChangePassword,
+      profileStatus: user.driverProfile?.profileStatus ?? null,
     };
+  }
+
+  /**
+   * Sets a new password and ends the current session (the token is blacklisted),
+   * so the user signs in again with the new credentials.
+   */
+  async changePassword(
+    userId: string,
+    dto: ChangePasswordDto,
+    token: string,
+  ): Promise<{ passwordChanged: boolean }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, passwordHash: true, isActive: true },
+    });
+    if (!user || !user.isActive) {
+      throw new AppUnauthorizedException(
+        'AUTH_ACCOUNT_UNAVAILABLE', {}, 'User account unavailable.');
+    }
+
+    const currentValid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!currentValid) {
+      throw new AppBadRequestException(
+        'AUTH_CURRENT_PASSWORD_INVALID', {}, 'The current password is incorrect.');
+    }
+    if (dto.currentPassword === dto.newPassword) {
+      throw new AppBadRequestException(
+        'AUTH_PASSWORD_UNCHANGED',
+        {},
+        'The new password must be different from the current password.',
+      );
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash: await bcrypt.hash(dto.newPassword, 10),
+        mustChangePassword: false,
+        passwordChangedAt: new Date(),
+        tempPasswordExpiresAt: null,
+      },
+    });
+
+    await this.logout(token);
+    return { passwordChanged: true };
   }
 
   /** Save the signed-in user's interface language. */

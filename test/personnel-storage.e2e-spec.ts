@@ -81,6 +81,7 @@ describe('Personnel & MinIO Storage (e2e)', () => {
         serviceNumber: testServiceNum,
         fullName: 'Sgt. E2E Test Driver',
         dateOfBirth: '1994-06-15',
+        email: `e2e.photo.${testServiceNum.toLowerCase()}@mod.gov.et`,
         contactPhone: '+251911000999',
         unitId: logUnitId,
         photoUrl: uploadedKey,
@@ -100,6 +101,8 @@ describe('Personnel & MinIO Storage (e2e)', () => {
         serviceNumber: testServiceNum,
         fullName: 'Duplicate Attempt',
         dateOfBirth: '1994-06-15',
+        email: `e2e.dup.${testServiceNum.toLowerCase()}@mod.gov.et`,
+        contactPhone: '+251911000998',
         unitId: logUnitId,
       })
       .expect(409);
@@ -127,6 +130,8 @@ describe('Personnel & MinIO Storage (e2e)', () => {
           {
             serviceNumber: bulkCode1,
             fullName: 'Cpl. Bulk One',
+            email: `${bulkCode1.toLowerCase()}@mod.gov.et`,
+            contactPhone: '+251911000101',
             rank: 'Corporal',
             gender: 'MALE',
             dateOfBirth: '1993-04-10',
@@ -137,6 +142,8 @@ describe('Personnel & MinIO Storage (e2e)', () => {
           {
             serviceNumber: bulkCode2,
             fullName: 'Pvt. Bulk Two',
+            email: `${bulkCode2.toLowerCase()}@mod.gov.et`,
+            contactPhone: '+251911000102',
             rank: 'Private',
             gender: 'FEMALE',
             dateOfBirth: '1996-08-22',
@@ -153,10 +160,20 @@ describe('Personnel & MinIO Storage (e2e)', () => {
       if (r.driver?.id) bulkCreatedDriverIds.push(r.driver.id);
     }
 
-    // Verify custom initial password works on login
-    await request(app.getHttpServer())
+    // Verify custom initial password works on login (and is flagged as temporary)
+    const login1 = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
       .send({ serviceNumber: bulkCode1, password: 'BulkPass@2026' })
+      .expect(200);
+    expect(login1.body.data.user.mustChangePassword).toBe(true);
+
+    // The row without a password got its own generated one, returned once.
+    const [row1, row2] = res.body.data.results;
+    expect(row1.temporaryPassword).toBeUndefined();
+    expect(row2.temporaryPassword).toEqual(expect.any(String));
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/login')
+      .send({ serviceNumber: bulkCode2, password: row2.temporaryPassword })
       .expect(200);
   });
 });

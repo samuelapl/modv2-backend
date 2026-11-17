@@ -84,6 +84,80 @@ describe('ApplicationsService', () => {
     }).compile();
 
     service = module.get<ApplicationsService>(ApplicationsService);
+    // The profile-completeness gate has its own tests below; stub it elsewhere.
+    jest.spyOn(service as any, 'assertProfileComplete').mockResolvedValue(undefined);
+  });
+
+  describe('profile completeness gate', () => {
+    const completeProfile = {
+      dateOfBirth: new Date('1994-01-01'),
+      gender: 'MALE',
+      nationalIdNumber: 'FAN-1',
+      bloodGroup: 'O+',
+      photoUrl: 'p.jpg',
+      emergencyContactName: 'Almaz',
+      emergencyContactPhone: '+251911887766',
+    };
+
+    it('blocks creating an application while the driver profile is incomplete', async () => {
+      (service as any).assertProfileComplete.mockRestore();
+      mockPrisma.driverProfile.findUnique
+        .mockResolvedValueOnce({ id: 'drv-1', userId: 'user-drv-1', unitId: 'unit-1' })
+        .mockResolvedValueOnce({ ...completeProfile, photoUrl: null, bloodGroup: ' ' });
+
+      await expect(
+        service.create(
+          {
+            driverProfileId: 'drv-1',
+            type: ApplicationType.NEW_AUTHORIZATION,
+            categoryIds: ['cat-lv'],
+          },
+          coordinatorUser,
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'PROFILE_INCOMPLETE',
+          params: { fields: 'bloodGroup, photoUrl' },
+        },
+      });
+      expect(mockPrisma.application.create).not.toHaveBeenCalled();
+    });
+
+    it('lets a complete profile through the gate', async () => {
+      (service as any).assertProfileComplete.mockRestore();
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce(completeProfile);
+      await expect((service as any).assertProfileComplete('drv-1')).resolves.toBeUndefined();
+    });
+
+    it('blocks submitting a standard application but not an officer-recorded pre-trained one', async () => {
+      const gate = (service as any).assertProfileComplete as jest.Mock;
+      const base = {
+        id: 'app-1',
+        status: ApplicationStatus.DRAFT,
+        driverProfileId: 'drv-1',
+        driverProfile: { id: 'drv-1', userId: 'user-drv-1', unitId: 'unit-1' },
+        requestedCategories: [],
+        priorPermit: null,
+      };
+
+      gate.mockRejectedValueOnce(new BadRequestException('PROFILE_INCOMPLETE'));
+      mockPrisma.application.findUnique.mockResolvedValue({
+        ...base,
+        type: ApplicationType.NEW_AUTHORIZATION,
+      });
+      await expect(service.submit('app-1', {}, coordinatorUser)).rejects.toThrow(
+        'PROFILE_INCOMPLETE',
+      );
+      expect(gate).toHaveBeenCalledWith('drv-1');
+
+      gate.mockClear();
+      mockPrisma.application.findUnique.mockResolvedValue({
+        ...base,
+        type: ApplicationType.PRE_TRAINED,
+      });
+      await service.submit('app-1', {}, coordinatorUser).catch(() => undefined);
+      expect(gate).not.toHaveBeenCalled();
+    });
   });
 
   it('blocks underage applicant for CAT-HV (minAgeRequired = 22)', async () => {

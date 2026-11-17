@@ -6,6 +6,7 @@ import { PrismaService } from './../src/prisma/prisma.service';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 
+import { completeDriver } from './helpers/driver-payload';
 describe('National License Verification (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -88,13 +89,13 @@ describe('National License Verification (e2e)', () => {
     const driverRes = await request(app.getHttpServer())
       .post('/api/v1/personnel/drivers')
       .set('Authorization', `Bearer ${coordToken}`)
-      .send({
+      .send(completeDriver({
         serviceNumber: testServiceNum,
         fullName: 'Cpl. License E2E Driver',
         dateOfBirth: '1993-04-12',
         contactPhone: '+251911223344',
         unitId: coordUnitId,
-      })
+      }))
       .expect(201);
 
     createdDriverId = driverRes.body.data.id;
