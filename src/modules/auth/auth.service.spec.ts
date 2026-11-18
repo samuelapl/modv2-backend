@@ -7,22 +7,27 @@ import { AuthService } from './auth.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
 import { PermissionResolverService } from '../../common/services/permission-resolver.service';
+import { LocalIdentityProvider } from '../keycloak';
 
 describe('AuthService', () => {
   let service: AuthService;
   let prisma: {
-    user: { findUnique: jest.Mock; findFirst: jest.Mock; update: jest.Mock };
+    user: { findUnique: jest.Mock; findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
     driverProfile: { updateMany: jest.Mock };
   };
   let jwtService: { signAsync: jest.Mock; decode: jest.Mock };
   let redis: { set: jest.Mock };
   let permissionResolver: { resolveUserPermissions: jest.Mock };
+  let keycloakTokenService: { loginDirectGrant: jest.Mock };
+  let keycloakAdminService: { findUserByServiceNumber: jest.Mock };
+  let keycloakProvider: { verifyPassword: jest.Mock; hashPassword: jest.Mock; changePassword: jest.Mock; updateIdentity: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
       user: {
         findUnique: jest.fn(),
         findFirst: jest.fn(),
+        create: jest.fn(),
         update: jest.fn(),
       },
       driverProfile: {
@@ -39,14 +44,29 @@ describe('AuthService', () => {
     permissionResolver = {
       resolveUserPermissions: jest.fn().mockResolvedValue(['users:manage', 'roles:manage']),
     };
+    keycloakTokenService = {
+      loginDirectGrant: jest.fn(),
+    };
+    keycloakAdminService = {
+      findUserByServiceNumber: jest.fn(),
+    };
+    keycloakProvider = new LocalIdentityProvider() as any;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        AuthService,
-        { provide: PrismaService, useValue: prisma },
-        { provide: JwtService, useValue: jwtService },
-        { provide: RedisService, useValue: redis },
-        { provide: PermissionResolverService, useValue: permissionResolver },
+        {
+          provide: AuthService,
+          useFactory: () =>
+            new AuthService(
+              prisma as any,
+              jwtService as any,
+              redis as any,
+              permissionResolver as any,
+              keycloakProvider as any,
+              keycloakTokenService as any,
+              keycloakAdminService as any,
+            ),
+        },
       ],
     }).compile();
 
@@ -288,6 +308,165 @@ describe('AuthService', () => {
         service.updateProfile('user-1', { email: 'taken@mod.gov.et' }),
       ).rejects.toMatchObject({ response: { code: 'USERS_EMAIL_EXISTS' } });
       expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Keycloak Identity Provider Mode', () => {
+    const originalEnv = process.env.IDENTITY_PROVIDER;
+
+    beforeEach(() => {
+      process.env.IDENTITY_PROVIDER = 'keycloak';
+    });
+
+    afterEach(() => {
+      process.env.IDENTITY_PROVIDER = originalEnv;
+    });
+
+    it('provisions user JIT on first login when user exists only in Keycloak', async () => {
+      keycloakTokenService.loginDirectGrant.mockResolvedValue({
+        access_token: 'kc-token',
+        expires_in: 300,
+      });
+
+      keycloakAdminService.findUserByServiceNumber.mockResolvedValue({
+        id: 'kc-jit-uuid',
+        username: 'mod-99999',
+        firstName: 'Tadesse',
+        lastName: 'Alemu',
+        email: 'tadesse@mod.gov.et',
+        enabled: true,
+        attributes: {
+          grandfatherName: ['Girma'],
+          rank: ['Captain'],
+          phone: ['+251911999999'],
+        },
+      });
+
+      prisma.user.findFirst.mockResolvedValue(null);
+
+      const createdUser = {
+        id: 'new-jit-id',
+        serviceNumber: 'MOD-99999',
+        fullName: 'Tadesse Alemu Girma',
+        rank: 'Captain',
+        phone: '+251911999999',
+        email: 'tadesse@mod.gov.et',
+        roles: [],
+        unitId: null,
+        isActive: true,
+        preferredLocale: 'en',
+        mustChangePassword: false,
+      };
+      prisma.user.create.mockResolvedValue(createdUser);
+      permissionResolver.resolveUserPermissions.mockResolvedValue([]);
+
+      const result = await service.login({
+        serviceNumber: 'mod-99999',
+        password: 'Password123!',
+      });
+
+      expect(keycloakTokenService.loginDirectGrant).toHaveBeenCalledWith(
+        'MOD-99999',
+        'Password123!',
+      );
+      expect(prisma.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            serviceNumber: 'MOD-99999',
+            keycloakId: 'kc-jit-uuid',
+            roles: ['STAFF_DRIVER'],
+          }),
+        }),
+      );
+      expect(result.user.serviceNumber).toBe('MOD-99999');
+      expect(result.user.roles).toEqual([]);
+      expect(result.user.permissions).toEqual([]);
+    });
+
+    it('refreshes identity and issues IDLMS JWT when user already exists in DB', async () => {
+      keycloakTokenService.loginDirectGrant.mockResolvedValue({
+        access_token: 'kc-token',
+      });
+
+      keycloakAdminService.findUserByServiceNumber.mockResolvedValue({
+        id: 'kc-existing-uuid',
+        username: 'mod-1309001',
+        firstName: 'Abebe',
+        lastName: 'Kebede',
+        enabled: true,
+        attributes: {
+          grandfatherName: ['Tessema'],
+          rank: ['Major'],
+          phone: ['+251911000000'],
+        },
+      });
+
+      const existingUser = {
+        id: 'user-id-1',
+        serviceNumber: 'MOD-1309001',
+        keycloakId: null,
+        fullName: 'Abebe Kebede Old',
+        rank: 'Captain',
+        phone: '+251911000000',
+        email: 'abebe@mod.gov.et',
+        roles: [SystemRole.SYSTEM_ADMIN],
+        customPermissions: [],
+        unitId: 'unit-1',
+        isActive: true,
+        preferredLocale: 'en',
+        mustChangePassword: false,
+      };
+
+      prisma.user.findFirst.mockResolvedValue(existingUser);
+      prisma.user.update.mockResolvedValue({
+        ...existingUser,
+        keycloakId: 'kc-existing-uuid',
+        fullName: 'Abebe Kebede Tessema',
+        rank: 'Major',
+      });
+
+      const result = await service.login({
+        serviceNumber: 'MOD-1309001',
+        password: 'Password123!',
+      });
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'user-id-1' },
+          data: expect.objectContaining({
+            keycloakId: 'kc-existing-uuid',
+            rank: 'Major',
+          }),
+        }),
+      );
+      expect(result.accessToken).toBe('signed-jwt-token');
+    });
+
+    it('delegates changePassword to keycloakProvider when IDENTITY_PROVIDER=keycloak', async () => {
+      const changePasswordSpy = jest
+        .spyOn(keycloakProvider, 'changePassword')
+        .mockResolvedValue(undefined);
+
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'user-1',
+        serviceNumber: 'MOD-1309001',
+        isActive: true,
+      });
+      prisma.user.update.mockResolvedValue({});
+
+      const result = await service.changePassword(
+        'user-1',
+        { currentPassword: 'OldPassword123!', newPassword: 'NewPassword123!' },
+        'sample-token',
+      );
+
+      expect(changePasswordSpy).toHaveBeenCalledWith(
+        'MOD-1309001',
+        'OldPassword123!',
+        'NewPassword123!',
+      );
+      expect(result.passwordChanged).toBe(true);
+      expect(redis.set).toHaveBeenCalled();
     });
   });
 });

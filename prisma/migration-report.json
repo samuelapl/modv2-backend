@@ -1,0 +1,86 @@
+[
+  {
+    "serviceNumber": "MOD-88219",
+    "fullName": "Dawit Tesfaye Bogale",
+    "email": "dawit.tesfaye@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-ADMIN-001",
+    "fullName": "Tewodros Alemu Gebremedhin",
+    "email": "sysadmin@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-AUDIT-001",
+    "fullName": "Rahel Lemma Fikre",
+    "email": "auditor@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-CMDR-001",
+    "fullName": "Abebe Worku Demissie",
+    "email": "commander@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-COORD-001",
+    "fullName": "Solomon Bekele Abate",
+    "email": "coordinator@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-EXAM-001",
+    "fullName": "Hana Tesfaye Gizaw",
+    "email": "examiner@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-GUARD-001",
+    "fullName": "Yonas Desta Berhe",
+    "email": "checkpoint@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-INST-001",
+    "fullName": "Girma Kebede Negash",
+    "email": "instructor@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-ISSUER-001",
+    "fullName": "Kidist Mengistu Zewdie",
+    "email": "issuer@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-LIC-001",
+    "fullName": "Mekdes Tadesse Wolde",
+    "email": "licensing@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-MED-001",
+    "fullName": "Selamawit Assefa Tsegaye",
+    "email": "medical@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  },
+  {
+    "serviceNumber": "MOD-TRN-001",
+    "fullName": "Bereket Haile Mulugeta",
+    "email": "training.admin@mod.gov.et",
+    "status": "NEEDS_CREATION",
+    "action": "Will provision in Keycloak with temporary password."
+  }
+]

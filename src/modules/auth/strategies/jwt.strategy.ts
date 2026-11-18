@@ -43,6 +43,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
+    const isUserDisabled = await this.redis.get(`jwt_user_disabled:${payload.sub}`);
+    if (isUserDisabled) {
+      throw new AppUnauthorizedException(
+        'AUTH_ACCOUNT_INACTIVE',
+        {},
+        'Account is disabled.',
+      );
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
       select: {

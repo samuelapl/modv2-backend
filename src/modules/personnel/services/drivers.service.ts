@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
   AppBadRequestException,
   AppConflictException,
@@ -13,6 +13,12 @@ import {
 import * as bcrypt from 'bcryptjs';
 import { generateTempPassword, tempPasswordExpiry } from '../../../common/utils/password.util';
 import { composeFullName, normalizeNamePart } from '../../../common/utils/person-name.util';
+import {
+  KEYCLOAK_PROVIDER_TOKEN,
+  KeycloakIdentityProvider,
+  LocalIdentityProvider,
+  CreatedIdentityResult,
+} from '../../keycloak';
 import {
   MIN_DRIVER_AGE,
   REQUIRED_PROFILE_FIELDS,
@@ -51,7 +57,12 @@ export interface RequestUserContext {
 
 @Injectable()
 export class DriversService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional()
+    @Inject(KEYCLOAK_PROVIDER_TOKEN)
+    private readonly identityProvider: KeycloakIdentityProvider = new LocalIdentityProvider(),
+  ) {}
 
   async findAll(query: QueryDriversDto, user: RequestUserContext) {
     const perms = new Set(user.resolvedPermissions || []);
@@ -318,25 +329,47 @@ export class DriversService {
     // No shared default password: an omitted one is generated and shown once.
     const generated = !dto.initialPassword;
     const temporaryPassword = dto.initialPassword ?? generateTempPassword();
-    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+    const identity = await this.identityProvider.createIdentity({
+      serviceNumber: normalizedService,
+      password: temporaryPassword,
+      firstName: normalizeNamePart(dto.firstName),
+      middleName: normalizeNamePart(dto.middleName),
+      lastName: normalizeNamePart(dto.lastName),
+      rank: dto.rank ? normalizeNamePart(dto.rank) : null,
+      phone: dto.contactPhone?.trim() || null,
+      email: normalizedEmail,
+      unitCode: unit.code,
+      mustChangePassword: true,
+    });
+    const passwordHash = identity.passwordHash ?? (await this.identityProvider.hashPassword(temporaryPassword));
 
-    const { driver, accountCreated } = await this.runDriverTransaction(
-      prior,
-      (tx, attempt) =>
-        this.createDriverRecordInTx(
-          tx,
-          dto,
-          normalizedService,
-          normalizedNationalId,
-          dob,
-          passwordHash,
-          prior ? { prior, createdById: user.id, attempt } : null,
-        ),
-    );
+    try {
+      const { driver, accountCreated } = await this.runDriverTransaction(
+        prior,
+        (tx, attempt) =>
+          this.createDriverRecordInTx(
+            tx,
+            dto,
+            normalizedService,
+            normalizedNationalId,
+            dob,
+            passwordHash,
+            prior ? { prior, createdById: user.id, attempt } : null,
+            identity.keycloakId,
+          ),
+      );
 
-    // An existing account (e.g. a staff user now registered as a driver) keeps
-    // its own password, so there is no temporary password to hand over.
-    return generated && accountCreated ? { ...driver, temporaryPassword } : driver;
+      // An existing account (e.g. a staff user now registered as a driver) keeps
+      // its own password, so there is no temporary password to hand over.
+      return generated && accountCreated && !identity.linkedExisting
+        ? { ...driver, temporaryPassword }
+        : driver;
+    } catch (err) {
+      if (identity.keycloakId && this.identityProvider.deleteIdentity) {
+        await this.identityProvider.deleteIdentity(identity.keycloakId).catch(() => {});
+      }
+      throw err;
+    }
   }
 
   /**
@@ -406,7 +439,7 @@ export class DriversService {
       await Promise.all([
         this.prisma.organizationalUnit.findMany({
           where: { id: { in: uniqueUnitIds } },
-          select: { id: true },
+          select: { id: true, code: true },
         }),
         this.prisma.driverProfile.findMany({
           where: { serviceNumber: { in: normalizedServices } },
@@ -427,6 +460,7 @@ export class DriversService {
       ]);
 
     const validUnitSet = new Set(validUnits.map((u) => u.id));
+    const unitCodeById = new Map(validUnits.map((u) => [u.id, u.code]));
     const dbServiceSet = new Set(existingByService.map((d) => d.serviceNumber));
     const dbNationalIdSet = new Set(
       existingByNationalId
@@ -452,6 +486,8 @@ export class DriversService {
       application?: { id: string; applicationNumber: string; status: string };
       /** Only present when the server generated it; shown once, never stored. */
       temporaryPassword?: string;
+      /** The Keycloak account already existed and was linked: the person keeps their current password. */
+      identityLinked?: boolean;
     }> = [];
 
     for (let i = 0; i < dto.drivers.length; i++) {
@@ -517,16 +553,46 @@ export class DriversService {
         // Each row without a supplied password gets its own random temporary one.
         const generated = !item.initialPassword;
         const rawPassword = item.initialPassword ?? generateTempPassword();
-        let passwordHash = generated
-          ? undefined
-          : passwordHashCache.get(rawPassword);
-        if (!passwordHash) {
-          passwordHash = await bcrypt.hash(rawPassword, 10);
-          if (!generated) passwordHashCache.set(rawPassword, passwordHash);
+
+        let identity: CreatedIdentityResult | undefined;
+        try {
+          identity = await this.identityProvider.createIdentity({
+            serviceNumber: normalizedService,
+            password: rawPassword,
+            firstName: normalizeNamePart(item.firstName),
+            middleName: normalizeNamePart(item.middleName),
+            lastName: normalizeNamePart(item.lastName),
+            rank: item.rank ? normalizeNamePart(item.rank) : null,
+            phone: item.contactPhone?.trim() || null,
+            email: normalizedEmail,
+            unitCode: unitCodeById.get(item.unitId) ?? null,
+            mustChangePassword: true,
+          });
+        } catch (kcErr: any) {
+          results.push({
+            rowIndex: i,
+            serviceNumber: normalizedService,
+            fullName: composeFullName(item.firstName, item.middleName, item.lastName),
+            status: 'FAILED',
+            error: kcErr.message || 'Identity provider provisioning failed.',
+          });
+          continue;
         }
 
-        const { driver: created, accountCreated } =
-          await this.runDriverTransaction(prior, (tx, attempt) =>
+        let passwordHash = identity?.passwordHash;
+        if (!passwordHash) {
+          passwordHash = generated
+            ? undefined
+            : passwordHashCache.get(rawPassword);
+          if (!passwordHash) {
+            passwordHash = await this.identityProvider.hashPassword(rawPassword);
+            if (!generated) passwordHashCache.set(rawPassword, passwordHash);
+          }
+        }
+
+        let createdResult;
+        try {
+          createdResult = await this.runDriverTransaction(prior, (tx, attempt) =>
             this.createDriverRecordInTx(
               tx,
               item,
@@ -535,8 +601,17 @@ export class DriversService {
               dob,
               passwordHash!,
               prior ? { prior, createdById: user.id, attempt } : null,
+              identity?.keycloakId,
             ),
           );
+        } catch (dbErr: any) {
+          if (identity?.keycloakId && this.identityProvider.deleteIdentity) {
+            await this.identityProvider.deleteIdentity(identity.keycloakId).catch(() => {});
+          }
+          throw dbErr;
+        }
+
+        const { driver: created, accountCreated } = createdResult;
 
         batchServiceSet.add(normalizedService);
         if (prior && priorLookup) {
@@ -557,7 +632,8 @@ export class DriversService {
           driver: created,
           application: created.preTrainedApplication ?? undefined,
           temporaryPassword:
-            generated && accountCreated ? rawPassword : undefined,
+            generated && accountCreated && !identity?.linkedExisting ? rawPassword : undefined,
+          identityLinked: identity?.linkedExisting ? true : undefined,
         });
       } catch (err: any) {
         results.push({
@@ -623,6 +699,7 @@ export class DriversService {
       createdById: string;
       attempt: number;
     } | null = null,
+    keycloakId?: string | null,
   ) {
     const normalizedEmail = dto.email?.trim().toLowerCase() || null;
     const names = {
@@ -640,6 +717,7 @@ export class DriversService {
       existingUser = await tx.user.create({
         data: {
           serviceNumber: normalizedService,
+          keycloakId: keycloakId ?? undefined,
           ...names,
           rank: dto.rank?.trim() || null,
           email: normalizedEmail,
@@ -910,6 +988,32 @@ export class DriversService {
             : {}),
         },
       });
+
+      if (this.identityProvider.updateIdentity) {
+        await this.identityProvider.updateIdentity(existing.serviceNumber, {
+          firstName: names?.firstName,
+          middleName: names?.middleName,
+          lastName: names?.lastName,
+          phone: normalizedContactPhone,
+          email: normalizedEmail,
+        });
+      }
+    }
+
+    // Keep the Keycloak "unitCode" attribute in step when the driver is moved to another unit.
+    if (
+      existing.userId &&
+      dto.unitId !== undefined &&
+      dto.unitId !== existing.unitId &&
+      this.identityProvider.updateIdentity
+    ) {
+      const unit = await this.prisma.organizationalUnit.findUnique({
+        where: { id: dto.unitId },
+        select: { code: true },
+      });
+      await this.identityProvider.updateIdentity(existing.serviceNumber, {
+        unitCode: unit?.code ?? null,
+      });
     }
 
     const data = {
@@ -1010,6 +1114,7 @@ export class DriversService {
       select: {
         id: true,
         userId: true,
+        serviceNumber: true,
         unitId: true,
         user: { select: { roles: true } },
       },
@@ -1046,10 +1151,12 @@ export class DriversService {
 
     const temporaryPassword = generateTempPassword();
     const expiresAt = tempPasswordExpiry();
+    const { passwordHash } = await this.identityProvider.resetPassword(driver.serviceNumber, temporaryPassword);
+
     await this.prisma.user.update({
       where: { id: driver.userId },
       data: {
-        passwordHash: await bcrypt.hash(temporaryPassword, 10),
+        passwordHash,
         mustChangePassword: true,
         tempPasswordExpiresAt: expiresAt,
       },

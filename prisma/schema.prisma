@@ -52,7 +52,9 @@ model User {
   lastName          String?
   rank              String?
   phone             String?
-  passwordHash      String
+  passwordHash      String?
+  keycloakId        String?             @unique // Keycloak user UUID when IDENTITY_PROVIDER=keycloak
+  lastSyncedAt      DateTime?           // Timestamp of last identity sync from Keycloak
   roles             SystemRole[]
   customPermissions String[]            @default([]) // Optional delegated user-level permissions
   unitId            String?

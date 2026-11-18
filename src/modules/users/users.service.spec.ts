@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { SystemRole } from '@prisma/client';
 import { UsersService } from './users.service';
+import { KEYCLOAK_PROVIDER_TOKEN } from '../keycloak';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionResolverService } from '../../common/services/permission-resolver.service';
 import { Permission } from '../../common/enums/permissions.enum';
@@ -18,6 +19,7 @@ describe('UsersService', () => {
       deleteMany: jest.Mock;
     };
     auditLog: { updateMany: jest.Mock };
+    organizationalUnit: { findUnique: jest.Mock };
     rolePermission: { findMany: jest.Mock; findUnique: jest.Mock; update: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -35,6 +37,9 @@ describe('UsersService', () => {
       },
       auditLog: {
         updateMany: jest.fn(),
+      },
+      organizationalUnit: {
+        findUnique: jest.fn().mockResolvedValue({ code: 'LOG-CORPS' }),
       },
       rolePermission: {
         findMany: jest.fn(),
@@ -437,6 +442,83 @@ describe('UsersService', () => {
       deletedIds: ['u-1', 'u-2'],
       deletedServiceNumbers: ['MOD-NEW-01', 'MOD-NEW-02'],
     });
+  });
+
+  it('sends the unit code to the identity provider when a user is created', async () => {
+    const createIdentity = jest.fn().mockResolvedValue({ keycloakId: 'kc-new' });
+    const withProvider: TestingModule = await Test.createTestingModule({
+      providers: [
+        UsersService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: PermissionResolverService, useValue: permissionResolver },
+        { provide: KEYCLOAK_PROVIDER_TOKEN, useValue: { createIdentity } },
+      ],
+    }).compile();
+    const svc = withProvider.get<UsersService>(UsersService);
+
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.organizationalUnit.findUnique.mockResolvedValue({ code: 'ENG-CORPS' });
+    prisma.user.create.mockResolvedValue({ id: 'new-id', serviceNumber: 'MOD-TEST-98', roles: [SystemRole.UNIT_COORDINATOR] });
+
+    await svc.create({
+      serviceNumber: 'MOD-TEST-98',
+      firstName: 'Dawit', middleName: 'Bekele', lastName: 'Tester',
+      rank: 'Major',
+      phone: '+251911223344',
+      email: 'unit@mod.gov.et',
+      password: 'Password@123',
+      roles: [SystemRole.UNIT_COORDINATOR],
+      unitId: '9f8beb56-c285-4e0b-908d-95b67440884d',
+    });
+
+    expect(createIdentity).toHaveBeenCalledWith(expect.objectContaining({ unitCode: 'ENG-CORPS' }));
+  });
+
+  it('also removes the identity-provider account of deleted users that are linked', async () => {
+    const deleteIdentity = jest.fn().mockResolvedValue(undefined);
+    const withProvider: TestingModule = await Test.createTestingModule({
+      providers: [
+        UsersService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: PermissionResolverService, useValue: permissionResolver },
+        { provide: KEYCLOAK_PROVIDER_TOKEN, useValue: { deleteIdentity } },
+      ],
+    }).compile();
+    const svc = withProvider.get<UsersService>(UsersService);
+
+    const noRecords = { approvalsGiven: 0, examinationsGiven: 0, issuedCredentials: 0, suspensionsImposed: 0 };
+    prisma.user.findMany.mockResolvedValue([
+      { id: 'u-1', serviceNumber: 'MOD-NEW-01', keycloakId: 'kc-1', driverProfile: null, _count: noRecords },
+      { id: 'u-2', serviceNumber: 'MOD-NEW-02', keycloakId: null, driverProfile: null, _count: noRecords },
+    ]);
+
+    await svc.bulkRemove(['u-1', 'u-2'], 'admin-id');
+
+    expect(prisma.user.deleteMany).toHaveBeenCalled();
+    expect(deleteIdentity).toHaveBeenCalledTimes(1);
+    expect(deleteIdentity).toHaveBeenCalledWith('kc-1');
+  });
+
+  it('keeps the local deletion even if removing the identity-provider account fails', async () => {
+    const deleteIdentity = jest.fn().mockRejectedValue(new Error('keycloak down'));
+    const withProvider: TestingModule = await Test.createTestingModule({
+      providers: [
+        UsersService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: PermissionResolverService, useValue: permissionResolver },
+        { provide: KEYCLOAK_PROVIDER_TOKEN, useValue: { deleteIdentity } },
+      ],
+    }).compile();
+    const svc = withProvider.get<UsersService>(UsersService);
+
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 'u-1', serviceNumber: 'MOD-NEW-01', keycloakId: 'kc-1', driverProfile: null,
+        _count: { approvalsGiven: 0, examinationsGiven: 0, issuedCredentials: 0, suspensionsImposed: 0 },
+      },
+    ]);
+
+    await expect(svc.bulkRemove(['u-1'], 'admin-id')).resolves.toMatchObject({ deletedCount: 1 });
   });
 
   it('should update role permissions and invalidate Redis cache immediately', async () => {

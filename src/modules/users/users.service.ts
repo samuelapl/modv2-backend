@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { SystemRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -6,6 +6,7 @@ import { PaginatedResult } from '../../common/dto/paginated-result.dto';
 import { generateTempPassword, tempPasswordExpiry } from '../../common/utils/password.util';
 import { composeFullName, normalizeNamePart } from '../../common/utils/person-name.util';
 import { PermissionResolverService } from '../../common/services/permission-resolver.service';
+import { KEYCLOAK_PROVIDER_TOKEN, KeycloakIdentityProvider, LocalIdentityProvider, unitCodeFor } from '../keycloak';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { QueryUsersDto } from './dto/query-users.dto';
@@ -95,9 +96,14 @@ const USER_SELECT = {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly permissionResolver: PermissionResolverService,
+    @Optional()
+    @Inject(KEYCLOAK_PROVIDER_TOKEN)
+    private readonly identityProvider: KeycloakIdentityProvider = new LocalIdentityProvider(),
   ) {}
 
   getStatus() {
@@ -195,8 +201,6 @@ export class UsersService {
     // Admin-issued passwords are temporary: the user must replace it on first login.
     const generated = !dto.password;
     const temporaryPassword = dto.password ?? generateTempPassword();
-    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
-
     const names = {
       firstName: normalizeNamePart(dto.firstName),
       middleName: normalizeNamePart(dto.middleName),
@@ -204,36 +208,58 @@ export class UsersService {
       fullName: composeFullName(dto.firstName, dto.middleName, dto.lastName),
     };
 
-    const created = await this.prisma.user.create({
-      data: {
-        serviceNumber: normalizedService,
-        ...names,
-        rank: dto.rank.trim(),
-        phone: dto.phone.trim(),
-        email: normalizedEmail,
-        passwordHash,
-        roles: dto.roles,
-        unitId: normalizedUnitId,
-        customPermissions: dto.customPermissions || [],
-        mustChangePassword: true,
-        tempPasswordExpiresAt: tempPasswordExpiry(),
-        // Created together with the account, so there is never a driver without a profile.
-        driverProfile:
-          dto.roles.includes(SystemRole.STAFF_DRIVER) && normalizedUnitId
-            ? newDriverProfile({
-                serviceNumber: normalizedService,
-                ...names,
-                rank: dto.rank.trim(),
-                phone: dto.phone.trim(),
-                unitId: normalizedUnitId,
-              })
-            : undefined,
-      },
-      select: USER_SELECT,
+    const identity = await this.identityProvider.createIdentity({
+      serviceNumber: normalizedService,
+      password: temporaryPassword,
+      firstName: names.firstName,
+      middleName: names.middleName,
+      lastName: names.lastName,
+      rank: dto.rank.trim(),
+      phone: dto.phone.trim(),
+      email: normalizedEmail,
+      unitCode: await unitCodeFor(this.prisma, normalizedUnitId),
+      mustChangePassword: true,
     });
 
+    let created;
+    try {
+      created = await this.prisma.user.create({
+        data: {
+          serviceNumber: normalizedService,
+          keycloakId: identity.keycloakId,
+          ...names,
+          rank: dto.rank.trim(),
+          phone: dto.phone.trim(),
+          email: normalizedEmail,
+          passwordHash: identity.passwordHash,
+          roles: dto.roles,
+          unitId: normalizedUnitId,
+          customPermissions: dto.customPermissions || [],
+          mustChangePassword: true,
+          tempPasswordExpiresAt: tempPasswordExpiry(),
+          // Created together with the account, so there is never a driver without a profile.
+          driverProfile:
+            dto.roles.includes(SystemRole.STAFF_DRIVER) && normalizedUnitId
+              ? newDriverProfile({
+                  serviceNumber: normalizedService,
+                  ...names,
+                  rank: dto.rank.trim(),
+                  phone: dto.phone.trim(),
+                  unitId: normalizedUnitId,
+                })
+              : undefined,
+        },
+        select: USER_SELECT,
+      });
+    } catch (err) {
+      if (identity.keycloakId && this.identityProvider.deleteIdentity) {
+        await this.identityProvider.deleteIdentity(identity.keycloakId).catch(() => {});
+      }
+      throw err;
+    }
+
     // The generated password is shown to the admin once and never stored in plain text.
-    return generated ? { ...created, temporaryPassword } : created;
+    return generated && !identity.linkedExisting ? { ...created, temporaryPassword } : created;
   }
 
   /**
@@ -248,14 +274,16 @@ export class UsersService {
         'You cannot reset your own password here. Use change password instead.',
       );
     }
-    await this.findOne(id);
+    const user = await this.findOne(id);
 
     const temporaryPassword = generateTempPassword();
     const expiresAt = tempPasswordExpiry();
+    const { passwordHash } = await this.identityProvider.resetPassword(user.serviceNumber, temporaryPassword);
+
     await this.prisma.user.update({
       where: { id },
       data: {
-        passwordHash: await bcrypt.hash(temporaryPassword, 10),
+        passwordHash,
         mustChangePassword: true,
         tempPasswordExpiresAt: expiresAt,
       },
@@ -304,6 +332,24 @@ export class UsersService {
     const nextRoles = dto.roles ?? current.roles;
     const needsProfile =
       nextRoles.includes(SystemRole.STAFF_DRIVER) && !current.driverProfile && nextUnitId;
+
+    if (dto.isActive !== undefined && dto.isActive !== current.isActive) {
+      await this.identityProvider.setEnabled(current.serviceNumber, dto.isActive);
+    }
+
+    const unitChanged = dto.unitId !== undefined && nextUnitId !== current.unitId;
+
+    if (this.identityProvider.updateIdentity && (names || unitChanged || dto.rank !== undefined || dto.phone !== undefined || nextEmail !== current.email)) {
+      await this.identityProvider.updateIdentity(current.serviceNumber, {
+        firstName: names?.firstName,
+        middleName: names?.middleName,
+        lastName: names?.lastName,
+        rank: dto.rank !== undefined ? dto.rank.trim() : undefined,
+        phone: dto.phone !== undefined ? dto.phone.trim() : undefined,
+        email: nextEmail,
+        ...(unitChanged ? { unitCode: await unitCodeFor(this.prisma, nextUnitId) } : {}),
+      });
+    }
 
     return this.prisma.user.update({
       where: { id },
@@ -366,6 +412,7 @@ export class UsersService {
       select: {
         id: true,
         serviceNumber: true,
+        keycloakId: true,
         driverProfile: { select: { id: true } },
         _count: {
           select: {
@@ -410,6 +457,21 @@ export class UsersService {
         where: { id: { in: targetIds } },
       });
     });
+
+    // Remove the identity too, so a deleted user cannot log in again or be re-created by the
+    // sync. Done after the local delete: a failed Keycloak call must never undo it, so it is
+    // only logged (the account then needs removing in Keycloak by hand).
+    if (this.identityProvider.deleteIdentity) {
+      const results = await Promise.allSettled(
+        users
+          .filter((u) => u.keycloakId)
+          .map((u) => this.identityProvider.deleteIdentity!(u.keycloakId!)),
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed > 0) {
+        this.logger.warn(`${failed} deleted user(s) could not be removed from the identity provider.`);
+      }
+    }
 
     return {
       deletedCount: users.length,

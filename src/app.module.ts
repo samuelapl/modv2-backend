@@ -10,6 +10,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { MustChangePasswordGuard } from './common/guards/must-change-password.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
+import { KeycloakModule } from './modules/keycloak/keycloak.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { PersonnelModule } from './modules/personnel/personnel.module';
@@ -37,6 +38,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     PrismaModule,
     RedisModule,
     CommonModule,
+    KeycloakModule,
     // All 15 Domain Modules
     AuthModule,
     UsersModule,

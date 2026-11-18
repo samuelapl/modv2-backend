@@ -17,6 +17,8 @@
     "prisma:push": "prisma db push",
     "prisma:seed": "ts-node prisma/seed.ts",
     "prisma:seed:demo": "ts-node prisma/seed-demo.ts",
+    "prisma:seed:keycloak": "ts-node prisma/seed-keycloak.ts",
+    "migrate:keycloak": "ts-node prisma/migrate-to-keycloak.ts",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
