@@ -409,11 +409,31 @@ describe('ApplicationsService', () => {
     });
   });
 
-  it('advances NEW_AUTHORIZATION exactly one stage forward from EXAM_PENDING', async () => {
+  it('advances NEW_AUTHORIZATION exactly one stage forward from MEDICAL_PENDING to TRAINING_PENDING', async () => {
     mockPrisma.application.findUnique.mockResolvedValue({
       id: 'app-new',
       type: ApplicationType.NEW_AUTHORIZATION,
-      status: ApplicationStatus.EXAM_PENDING,
+      status: ApplicationStatus.MEDICAL_PENDING,
+      driverProfile: { id: 'drv-1', userId: 'user-drv-1' },
+      requestedCategories: [{ category: { requiresMedical: true } }],
+    });
+    mockTx.application.update.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 'app-new', ...data }),
+    );
+
+    const res = await service.screen(
+      'app-new',
+      { action: 'ADVANCE_STAGE' },
+      licOfficer,
+    );
+    expect(res.status).toBe(ApplicationStatus.TRAINING_PENDING);
+  });
+
+  it('routes NEW_AUTHORIZATION to MEDICAL_PENDING first after screening', async () => {
+    mockPrisma.application.findUnique.mockResolvedValue({
+      id: 'app-new',
+      type: ApplicationType.NEW_AUTHORIZATION,
+      status: ApplicationStatus.SCREENING,
       driverProfile: { id: 'drv-1', userId: 'user-drv-1' },
       requestedCategories: [{ category: { requiresMedical: true } }],
     });

@@ -60,17 +60,19 @@ export function getPostScreeningStages(
       return [...medical, ApplicationStatus.READY_FOR_APPROVAL];
     case ApplicationType.REINSTATEMENT:
       return [
-        ApplicationStatus.TRAINING_PENDING,
         ...medical,
+        ApplicationStatus.TRAINING_PENDING,
         ApplicationStatus.READY_FOR_APPROVAL,
       ];
     case ApplicationType.NEW_AUTHORIZATION:
     case ApplicationType.ADDITIONAL_CATEGORY:
     default:
+      // Medical fitness is a cheap pass/fail gate, so it runs before the
+      // costly training and exam stages.
       return [
+        ...medical,
         ApplicationStatus.TRAINING_PENDING,
         ApplicationStatus.EXAM_PENDING,
-        ...medical,
         ApplicationStatus.READY_FOR_APPROVAL,
       ];
   }

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   ApplicationStatus,
+  ApplicationType,
   CredentialStatus,
   ExamOutcome,
   ExamType,
@@ -293,6 +294,62 @@ export class ReportsService {
         percentage: pct(activeCredentialCount, totalEndorsements),
       };
     });
+  }
+
+  /**
+   * Applications per calendar month over the last N months, split by type.
+   * Drafts are excluded (not yet submitted). Every month and every type is
+   * present in the result (zero-filled) so the chart lines never have gaps.
+   */
+  async getApplicationsTrend(query: QueryReportsDto) {
+    const { driverRelWhere } = this.buildScope(query);
+    const monthCount = query.months || 12;
+
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth() - (monthCount - 1), 1);
+
+    const monthKey = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+    const types = Object.values(ApplicationType);
+    const points = Array.from({ length: monthCount }, (_, i) => {
+      const key = monthKey(new Date(first.getFullYear(), first.getMonth() + i, 1));
+      const counts = Object.fromEntries(types.map((t) => [t, 0])) as Record<
+        ApplicationType,
+        number
+      >;
+      return { month: key, total: 0, counts };
+    });
+    const byMonth = new Map(points.map((p) => [p.month, p]));
+
+    const rows = await this.prisma.application.findMany({
+      where: {
+        ...driverRelWhere,
+        status: { not: ApplicationStatus.DRAFT },
+        createdAt: { gte: first },
+      },
+      select: { type: true, createdAt: true },
+    });
+
+    const totals = Object.fromEntries(types.map((t) => [t, 0])) as Record<
+      ApplicationType,
+      number
+    >;
+    for (const r of rows) {
+      const point = byMonth.get(monthKey(r.createdAt));
+      if (!point) continue;
+      point.counts[r.type] += 1;
+      point.total += 1;
+      totals[r.type] += 1;
+    }
+
+    return {
+      months: monthCount,
+      types,
+      totals,
+      total: rows.length,
+      points: points.map((p) => ({ month: p.month, total: p.total, ...p.counts })),
+    };
   }
 
   async getExpiringPermits(query: QueryReportsDto) {

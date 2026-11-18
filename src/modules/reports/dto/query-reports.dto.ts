@@ -18,4 +18,15 @@ export class QueryReportsDto {
   @Min(1)
   @Max(365)
   expiringDays?: number;
+
+  @ApiPropertyOptional({
+    description: 'Number of months (ending with the current one) for trend charts (default 12)',
+    default: 12,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2)
+  @Max(24)
+  months?: number;
 }

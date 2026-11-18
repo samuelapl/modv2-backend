@@ -1,13 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import {
   ApplicationStatus,
-  ApplicationType,
   ExamOutcome,
   ExamType,
   PersonnelStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import { categoriesForMedical } from '../applications/helpers/additional-category.helper';
 import { PaginatedResult } from '../../common/dto/paginated-result.dto';
 import { Permission } from '../../common/enums/permissions.enum';
 import { RequestUserContext } from '../personnel/services/drivers.service';
@@ -513,9 +511,6 @@ export class ExaminationsService {
           where: { id: dto.applicationId },
           include: {
             requestedCategories: { include: { category: true } },
-            replacesCredential: {
-              select: { categories: { select: { category: true } } },
-            },
           },
         });
 
@@ -547,22 +542,13 @@ export class ExaminationsService {
             );
 
           if (allPassed) {
-            // An upgrade resets the whole card, so held categories count too.
-            const needsMedical = categoriesForMedical(
-              requiredCats,
-              app.type === ApplicationType.ADDITIONAL_CATEGORY
-                ? (app.replacesCredential?.categories.map((c) => c.category) ?? [])
-                : [],
-            ).some((c) => c.requiresMedical);
+            // Medical clearance now happens before training, so the exam
+            // is the last gate before command approval.
             await tx.application.update({
               where: { id: app.id },
               data: {
-                status: needsMedical
-                  ? ApplicationStatus.MEDICAL_PENDING
-                  : ApplicationStatus.READY_FOR_APPROVAL,
-                currentStage: needsMedical
-                  ? 'Awaiting Medical Fitness Clearance'
-                  : 'Ready for Command Approval',
+                status: ApplicationStatus.READY_FOR_APPROVAL,
+                currentStage: 'Ready for Command Approval',
               },
             });
           }

@@ -14,7 +14,7 @@ describe('MedicalService', () => {
 
   const mockTx: any = {
     medicalFitnessReview: { create: jest.fn() },
-    application: { update: jest.fn() },
+    application: { update: jest.fn(), findUnique: jest.fn() },
   };
 
   const mockPrisma: any = {
@@ -138,7 +138,8 @@ describe('MedicalService', () => {
     expect(callArg.select.operationalRestrictions).toBe(true);
   });
 
-  it('records FIT_WITH_RESTRICTIONS and advances MEDICAL_PENDING to READY_FOR_APPROVAL', async () => {
+  it('records FIT_WITH_RESTRICTIONS and advances MEDICAL_PENDING to TRAINING_PENDING (medical runs before training)', async () => {
+    mockTx.application.findUnique.mockResolvedValue({ type: 'NEW_AUTHORIZATION' });
     mockPrisma.driverProfile.findUnique.mockResolvedValue({
       id: 'drv-1',
       userId: 'user-drv-1',
@@ -174,8 +175,8 @@ describe('MedicalService', () => {
     expect(mockTx.application.update).toHaveBeenCalledWith({
       where: { id: 'app-1' },
       data: {
-        status: ApplicationStatus.READY_FOR_APPROVAL,
-        currentStage: 'Ready for Command Approval',
+        status: ApplicationStatus.TRAINING_PENDING,
+        currentStage: 'Awaiting Training Completion',
         rejectionReason: null,
       },
     });

@@ -171,7 +171,7 @@ describe('ExaminationsService', () => {
     ).rejects.toThrow(ConflictException);
   });
 
-  it('keeps EXAM_PENDING on Theory PASS alone, then advances to MEDICAL_PENDING when Practical also PASSes', async () => {
+  it('keeps EXAM_PENDING on Theory PASS alone, then advances to READY_FOR_APPROVAL when Practical also PASSes', async () => {
     mockPrisma.driverProfile.findUnique.mockResolvedValue({
       id: 'drv-1',
       userId: 'user-drv-1',
@@ -222,7 +222,7 @@ describe('ExaminationsService', () => {
     );
     expect(mockTx.application.update).not.toHaveBeenCalled();
 
-    // Now Practical also passed -> MUST advance to MEDICAL_PENDING
+    // Now Practical also passed -> MUST advance to READY_FOR_APPROVAL (medical runs earlier)
     mockTx.examinationRecord.findMany.mockResolvedValueOnce([
       { categoryCode: 'CAT-SP', examType: ExamType.THEORETICAL },
       { categoryCode: 'CAT-SP', examType: ExamType.PRACTICAL },
@@ -242,8 +242,8 @@ describe('ExaminationsService', () => {
     expect(mockTx.application.update).toHaveBeenCalledWith({
       where: { id: 'app-1' },
       data: {
-        status: ApplicationStatus.MEDICAL_PENDING,
-        currentStage: 'Awaiting Medical Fitness Clearance',
+        status: ApplicationStatus.READY_FOR_APPROVAL,
+        currentStage: 'Ready for Command Approval',
       },
     });
   });

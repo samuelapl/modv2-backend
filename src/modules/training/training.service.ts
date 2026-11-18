@@ -13,6 +13,10 @@ import {
   SystemRole,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  formatStageLabel,
+  resolveNextStage,
+} from '../applications/helpers/application-state.helper';
 import { PaginatedResult } from '../../common/dto/paginated-result.dto';
 import { Permission } from '../../common/enums/permissions.enum';
 import { RequestUserContext } from '../personnel/services/drivers.service';
@@ -1183,11 +1187,16 @@ export class TrainingService {
             requiredCodes.length > 0 &&
             requiredCodes.every((code) => completedCodes.has(code))
           ) {
+            // Medical precedes training, so only the stages after training
+            // matter here (exam for new/additional, approval for reinstatement).
+            const nextStage =
+              resolveNextStage(app.type, ApplicationStatus.TRAINING_PENDING, []) ??
+              ApplicationStatus.READY_FOR_APPROVAL;
             await tx.application.update({
               where: { id: app.id },
               data: {
-                status: ApplicationStatus.EXAM_PENDING,
-                currentStage: 'Awaiting Theory & Practical Exams',
+                status: nextStage,
+                currentStage: formatStageLabel(nextStage),
               },
             });
           }

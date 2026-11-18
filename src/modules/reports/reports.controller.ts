@@ -33,6 +33,13 @@ export class ReportsController {
     return this.service.getCategoryDistribution(query);
   }
 
+  @Get('applications-trend')
+  @RequirePermissions(Permission.REPORTS_VIEW)
+  @ApiOperation({ summary: 'Monthly count of submitted applications, split by application type' })
+  getApplicationsTrend(@Query() query: QueryReportsDto) {
+    return this.service.getApplicationsTrend(query);
+  }
+
   @Get('expiring-permits')
   @RequirePermissions(Permission.REPORTS_VIEW)
   @ApiOperation({ summary: 'List soon-to-expire active MoD permits ordered by urgency' })

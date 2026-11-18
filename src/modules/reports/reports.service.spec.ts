@@ -15,7 +15,7 @@ describe('ReportsService', () => {
 
   const prismaMock = {
     driverProfile: { groupBy: jest.fn() },
-    application: { groupBy: jest.fn() },
+    application: { groupBy: jest.fn(), findMany: jest.fn() },
     examinationRecord: { groupBy: jest.fn() },
     issuedCredential: {
       groupBy: jest.fn(),
@@ -156,5 +156,37 @@ describe('ReportsService', () => {
       'WARNING',
       'NOTICE',
     ]);
+  });
+
+  it('builds a zero-filled monthly application trend split by type', async () => {
+    const now = new Date();
+    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 10);
+    prismaMock.application.findMany.mockResolvedValue([
+      { type: 'NEW_AUTHORIZATION', createdAt: thisMonth },
+      { type: 'NEW_AUTHORIZATION', createdAt: thisMonth },
+      { type: 'RENEWAL', createdAt: lastMonth },
+    ]);
+
+    const res = await service.getApplicationsTrend({ months: 6 });
+
+    expect(res.points).toHaveLength(6);
+    expect(res.total).toBe(3);
+    expect(res.totals.NEW_AUTHORIZATION).toBe(2);
+    expect(res.totals.RENEWAL).toBe(1);
+    expect(res.totals.REPLACEMENT).toBe(0);
+
+    const last = res.points[5];
+    expect(last.NEW_AUTHORIZATION).toBe(2);
+    expect(last.total).toBe(2);
+    const prev = res.points[4];
+    expect(prev.RENEWAL).toBe(1);
+    // months without data are present and zero (no gaps in the lines)
+    expect(res.points[0].total).toBe(0);
+    expect(res.points[0].PRE_TRAINED).toBe(0);
+
+    // drafts are never counted
+    const where = prismaMock.application.findMany.mock.calls[0][0].where;
+    expect(where.status).toEqual({ not: ApplicationStatus.DRAFT });
   });
 });

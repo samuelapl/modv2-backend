@@ -5,6 +5,10 @@ import {
   PersonnelStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  formatStageLabel,
+  resolveNextStage,
+} from '../applications/helpers/application-state.helper';
 import { PaginatedResult } from '../../common/dto/paginated-result.dto';
 import { Permission } from '../../common/enums/permissions.enum';
 import { RequestUserContext } from '../personnel/services/drivers.service';
@@ -429,11 +433,25 @@ export class MedicalService {
 
       if (dto.applicationId) {
         if (isClearing) {
+          // Medical now runs first: advance to whatever follows it for this
+          // application type (training for new/reinstatement, else approval).
+          const linked = await tx.application.findUnique({
+            where: { id: dto.applicationId },
+            select: { type: true },
+          });
+          const nextStage =
+            (linked &&
+              resolveNextStage(
+                linked.type,
+                ApplicationStatus.MEDICAL_PENDING,
+                [{ requiresMedical: true }],
+              )) ||
+            ApplicationStatus.READY_FOR_APPROVAL;
           await tx.application.update({
             where: { id: dto.applicationId },
             data: {
-              status: ApplicationStatus.READY_FOR_APPROVAL,
-              currentStage: 'Ready for Command Approval',
+              status: nextStage,
+              currentStage: formatStageLabel(nextStage),
               rejectionReason: null,
             },
           });
