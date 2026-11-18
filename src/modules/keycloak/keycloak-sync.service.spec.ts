@@ -4,12 +4,19 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
 
 describe('KeycloakSyncService', () => {
+  const originalScope = process.env.KEYCLOAK_SYNC_SCOPE;
+  afterAll(() => {
+    if (originalScope === undefined) delete process.env.KEYCLOAK_SYNC_SCOPE;
+    else process.env.KEYCLOAK_SYNC_SCOPE = originalScope;
+  });
+
   let service: KeycloakSyncService;
   let adminService: jest.Mocked<KeycloakAdminService>;
   let prisma: any;
   let redis: any;
 
   beforeEach(() => {
+    process.env.KEYCLOAK_SYNC_SCOPE = 'group'; // most tests exercise the group-based sync
     adminService = {
       listGroupMembers: jest.fn(),
       listUsers: jest.fn(),
@@ -272,6 +279,52 @@ describe('KeycloakSyncService', () => {
         expect(res).toMatchObject({ removed: 0, deactivated: 0 });
         expect(prisma.user.delete).not.toHaveBeenCalled();
         expect(prisma.user.update).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('realm scope (default)', () => {
+      const kc = (id: string, username: string, extra: Record<string, unknown> = {}) => ({
+        id, username, firstName: 'F', lastName: 'L', enabled: true, ...extra,
+      });
+
+      beforeEach(() => {
+        process.env.KEYCLOAK_SYNC_SCOPE = 'realm';
+        prisma.user.findFirst.mockResolvedValue(null);
+        prisma.user.create.mockImplementation(async ({ data }: any) => ({ id: `db-${data.serviceNumber}`, ...data }));
+      });
+
+      it('brings in every realm user without needing a group', async () => {
+        adminService.listAllUsers.mockResolvedValue([kc('k1', 'mod-1'), kc('k2', 'mod-2')] as any);
+
+        const res = await service.syncKeycloakGroup();
+
+        expect(res.created).toBe(2);
+        expect(adminService.listGroupMembers).not.toHaveBeenCalled();
+      });
+
+      it('skips service accounts, which are not people', async () => {
+        adminService.listAllUsers.mockResolvedValue([
+          kc('k1', 'mod-1'),
+          kc('k2', 'service-account-idlms-backend', { serviceAccountClientId: 'idlms-backend' }),
+        ] as any);
+
+        const res = await service.syncKeycloakGroup();
+
+        expect(res.created).toBe(1);
+        expect(prisma.user.create).toHaveBeenCalledTimes(1);
+        expect(prisma.user.create).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ serviceNumber: 'MOD-1' }) }),
+        );
+      });
+
+      it('aborts without changing anything when the realm cannot be read', async () => {
+        adminService.listAllUsers.mockResolvedValue(null);
+
+        const res = await service.syncKeycloakGroup();
+
+        expect(res).toMatchObject({ totalProcessed: 0, created: 0, removed: 0, deactivated: 0 });
+        expect(prisma.user.create).not.toHaveBeenCalled();
+        expect(prisma.user.findMany).not.toHaveBeenCalled();
       });
     });
 

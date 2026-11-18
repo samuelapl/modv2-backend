@@ -7,6 +7,7 @@ import {
 import { KeycloakAdminService } from '../keycloak-admin.service';
 import { KeycloakTokenService } from '../keycloak-token.service';
 import { AppBadRequestException, AppNotFoundException } from '../../../common/errors';
+import { getSyncScope } from '../provisioning';
 
 @Injectable()
 export class KeycloakRemoteIdentityProvider implements KeycloakIdentityProvider {
@@ -49,6 +50,7 @@ export class KeycloakRemoteIdentityProvider implements KeycloakIdentityProvider 
 
   /** Puts the user in the group the scheduled sync reads, so Keycloak-side edits reach IDLMS. */
   private async joinSyncGroup(keycloakId: string): Promise<void> {
+    if (getSyncScope() !== 'group') return; // the realm-wide sync does not use a group
     const group = process.env.KEYCLOAK_SYNC_GROUP || 'idlms-users';
     await this.adminService.addUserToGroup(keycloakId, group);
   }

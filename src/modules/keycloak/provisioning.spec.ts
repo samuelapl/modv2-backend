@@ -1,4 +1,4 @@
-import { ensureDriverProfile, getDefaultRoles, resolveUnitId } from './provisioning';
+import { ensureDriverProfile, getDefaultRoles, getSyncScope, isServiceAccount, resolveUnitId } from './provisioning';
 
 describe('provisioning', () => {
   const original = process.env.DEFAULT_ROLE;
@@ -73,6 +73,40 @@ describe('provisioning', () => {
       const p = writer();
       await expect(ensureDriverProfile(p, user({ unitId: null }))).resolves.toBeNull();
       expect(p.driverProfile.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getSyncScope', () => {
+    const original = process.env.KEYCLOAK_SYNC_SCOPE;
+    afterEach(() => {
+      if (original === undefined) delete process.env.KEYCLOAK_SYNC_SCOPE;
+      else process.env.KEYCLOAK_SYNC_SCOPE = original;
+    });
+
+    it('defaults to the whole realm', () => {
+      delete process.env.KEYCLOAK_SYNC_SCOPE;
+      expect(getSyncScope()).toBe('realm');
+    });
+
+    it('uses the group only when asked, case-insensitively', () => {
+      process.env.KEYCLOAK_SYNC_SCOPE = ' Group ';
+      expect(getSyncScope()).toBe('group');
+    });
+
+    it('treats anything unrecognised as the realm', () => {
+      process.env.KEYCLOAK_SYNC_SCOPE = 'nonsense';
+      expect(getSyncScope()).toBe('realm');
+    });
+  });
+
+  describe('isServiceAccount', () => {
+    it('recognises a client service account by its marker or its name', () => {
+      expect(isServiceAccount({ username: 'x', serviceAccountClientId: 'idlms-backend' })).toBe(true);
+      expect(isServiceAccount({ username: 'service-account-other' })).toBe(true);
+    });
+
+    it('does not flag people', () => {
+      expect(isServiceAccount({ username: 'mod-1309001' })).toBe(false);
     });
   });
 });

@@ -3,7 +3,14 @@ import { Cron } from '@nestjs/schedule';
 import { SystemRole } from '@prisma/client';
 import { KeycloakAdminService } from './keycloak-admin.service';
 import { toIdlmsIdentity, toIdlmsServiceNumber } from './name-mapping';
-import { ensureDriverProfile, getDefaultRoles, resolveUnitId } from './provisioning';
+import {
+  ensureDriverProfile,
+  getDefaultRoles,
+  getSyncScope,
+  isServiceAccount,
+  resolveUnitId,
+} from './provisioning';
+import { KeycloakUserRepresentation } from './name-mapping';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../../redis/redis.service';
 
@@ -70,8 +77,21 @@ export class KeycloakSyncService {
     let disabledCount = 0;
 
     try {
-      const kcUsers = await this.adminService.listGroupMembers(targetGroup);
-      this.logger.log(`Fetched ${kcUsers.length} users from Keycloak group "${targetGroup}".`);
+      // The full realm list is needed for the removal check in both scopes.
+      const allUsers = await this.adminService.listAllUsers();
+
+      let kcUsers: KeycloakUserRepresentation[];
+      if (getSyncScope() === 'group') {
+        kcUsers = await this.adminService.listGroupMembers(targetGroup);
+        this.logger.log(`Fetched ${kcUsers.length} users from Keycloak group "${targetGroup}".`);
+      } else {
+        if (!allUsers) {
+          this.logger.error('Keycloak sync aborted: the realm user list could not be read.');
+          return { totalProcessed: 0, created: 0, updated: 0, disabled: 0, removed: 0, deactivated: 0, durationMs: Date.now() - startTime };
+        }
+        kcUsers = allUsers.filter((u) => !isServiceAccount(u));
+        this.logger.log(`Fetched ${kcUsers.length} users from the Keycloak realm.`);
+      }
 
       for (const kcUser of kcUsers) {
         if (!kcUser.username) continue;
@@ -148,7 +168,7 @@ export class KeycloakSyncService {
         }
       }
 
-      const { removed, deactivated } = await this.reconcileRemovedUsers();
+      const { removed, deactivated } = await this.reconcileRemovedUsers(allUsers);
 
       const durationMs = Date.now() - startTime;
       return {
@@ -174,10 +194,11 @@ export class KeycloakSyncService {
    * returned no users, or would remove more than KEYCLOAK_SYNC_MAX_REMOVALS accounts at once
    * (default: 10% of linked users, at least 5). System administrators are never touched.
    */
-  private async reconcileRemovedUsers(): Promise<{ removed: number; deactivated: number }> {
+  private async reconcileRemovedUsers(
+    kcUsers: KeycloakUserRepresentation[] | null,
+  ): Promise<{ removed: number; deactivated: number }> {
     const none = { removed: 0, deactivated: 0 };
 
-    const kcUsers = await this.adminService.listAllUsers();
     if (!kcUsers || kcUsers.length === 0) {
       this.logger.warn('Skipping removal check: Keycloak users could not be read (or the realm is empty).');
       return none;

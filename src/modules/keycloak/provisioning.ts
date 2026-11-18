@@ -21,6 +21,21 @@ export function getDefaultRoles(): SystemRole[] {
   return roles;
 }
 
+/**
+ * Which Keycloak users the sync brings into IDLMS.
+ *  - "realm" (default): everyone in the realm, so anyone created in Keycloak appears.
+ *  - "group": only members of KEYCLOAK_SYNC_GROUP, for a realm shared with systems whose
+ *    users should not appear here.
+ */
+export function getSyncScope(): 'realm' | 'group' {
+  return (process.env.KEYCLOAK_SYNC_SCOPE ?? 'realm').trim().toLowerCase() === 'group' ? 'group' : 'realm';
+}
+
+/** Keycloak creates a user for each client's service account; those are not people. */
+export function isServiceAccount(user: { username?: string; serviceAccountClientId?: string }): boolean {
+  return Boolean(user.serviceAccountClientId) || (user.username ?? '').startsWith('service-account-');
+}
+
 /** Minimal Prisma surface needed to resolve a unit, so callers can pass PrismaService. */
 interface UnitLookup {
   organizationalUnit: {
@@ -78,6 +93,7 @@ interface ProfileWriter {
  * through the complete-profile wizard. Needs a unit (the profile requires one), so a
  * user with no resolvable unit is skipped. Idempotent.
  */
+
 export async function ensureDriverProfile(
   prisma: ProfileWriter,
   user: ProvisionedUser,

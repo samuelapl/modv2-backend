@@ -4,6 +4,12 @@ import { KeycloakTokenService } from '../keycloak-token.service';
 import { AppBadRequestException } from '../../../common/errors';
 
 describe('KeycloakRemoteIdentityProvider', () => {
+  const originalScope = process.env.KEYCLOAK_SYNC_SCOPE;
+  afterEach(() => {
+    if (originalScope === undefined) delete process.env.KEYCLOAK_SYNC_SCOPE;
+    else process.env.KEYCLOAK_SYNC_SCOPE = originalScope;
+  });
+
   let provider: KeycloakRemoteIdentityProvider;
   let adminService: jest.Mocked<KeycloakAdminService>;
   let tokenService: jest.Mocked<KeycloakTokenService>;
@@ -31,6 +37,7 @@ describe('KeycloakRemoteIdentityProvider', () => {
 
   describe('createIdentity', () => {
     it('links to existing Keycloak user if already present (D1)', async () => {
+      process.env.KEYCLOAK_SYNC_SCOPE = 'group';
       adminService.findUserByServiceNumber.mockResolvedValue({
         id: 'existing-kc-uuid',
         username: 'mod-1309001',
@@ -51,6 +58,7 @@ describe('KeycloakRemoteIdentityProvider', () => {
     });
 
     it('provisions new Keycloak user when not yet registered', async () => {
+      process.env.KEYCLOAK_SYNC_SCOPE = 'group';
       adminService.findUserByServiceNumber.mockResolvedValue(null);
       adminService.createUser.mockResolvedValue('new-kc-uuid-999');
 
@@ -68,7 +76,18 @@ describe('KeycloakRemoteIdentityProvider', () => {
       expect(adminService.addUserToGroup).toHaveBeenCalledWith('new-kc-uuid-999', 'idlms-users');
     });
 
+    it('does not manage group membership in the default realm-wide scope', async () => {
+      delete process.env.KEYCLOAK_SYNC_SCOPE;
+      adminService.findUserByServiceNumber.mockResolvedValue(null);
+      adminService.createUser.mockResolvedValue('kc-realm');
+
+      await provider.createIdentity({ serviceNumber: 'MOD-4', password: 'Password123!' });
+
+      expect(adminService.addUserToGroup).not.toHaveBeenCalled();
+    });
+
     it('still creates the identity when joining the sync group fails (best effort)', async () => {
+      process.env.KEYCLOAK_SYNC_SCOPE = 'group';
       adminService.findUserByServiceNumber.mockResolvedValue(null);
       adminService.createUser.mockResolvedValue('kc-3');
       adminService.addUserToGroup.mockResolvedValue(false);
