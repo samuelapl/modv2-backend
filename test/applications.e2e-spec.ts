@@ -7,6 +7,7 @@ import { TransformInterceptor } from './../src/common/interceptors/transform.int
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 
 import { completeDriver } from './helpers/driver-payload';
+import { SEED_PASSWORD } from './../prisma/seed-password';
 describe('Categories & Applications Workflow (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -71,20 +72,20 @@ describe('Categories & Applications Workflow (e2e)', () => {
   it('Authenticates actors and fetches MoD vehicle categories', async () => {
     const resCoord = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-COORD-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-COORD-001', password: SEED_PASSWORD })
       .expect(200);
     coordToken = resCoord.body.data.accessToken;
     coordUnitId = resCoord.body.data.user.unitId;
 
     const resLic = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-LIC-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-LIC-001', password: SEED_PASSWORD })
       .expect(200);
     licToken = resLic.body.data.accessToken;
 
     const resCmdr = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-CMDR-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-CMDR-001', password: SEED_PASSWORD })
       .expect(200);
     cmdrToken = resCmdr.body.data.accessToken;
 

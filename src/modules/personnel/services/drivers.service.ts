@@ -47,6 +47,7 @@ import {
   resolvePriorPermit,
 } from '../../applications/helpers/prior-permit.helper';
 import { resolvePermitState } from '../../applications/helpers/permit-state.helper';
+import { autoVerifiedIdentity } from '../helpers/identity-verification.helper';
 
 export interface RequestUserContext {
   id: string;
@@ -764,6 +765,7 @@ export class DriversService {
         personnelStatus: dto.personnelStatus,
         profileStatus,
         profileCompletedAt: profileStatus === 'COMPLETE' ? new Date() : null,
+        ...autoVerifiedIdentity(),
       },
       include: {
         unit: { select: { id: true, code: true, name: true } },
@@ -815,6 +817,9 @@ export class DriversService {
       // NONE | PENDING_VERIFICATION | RETURNED | EXISTING_PERMIT | CARD_ISSUED
       permitState: permit.permitState,
       permit: permit.permit,
+      // Another case still in flight (a new authorization, a renewal, ...); the client uses it
+      // to show progress and to stop offering a second application.
+      activeApplication: permit.activeApplication,
       declaration: permit.declaration,
     };
   }

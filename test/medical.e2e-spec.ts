@@ -7,6 +7,7 @@ import { TransformInterceptor } from './../src/common/interceptors/transform.int
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 
 import { completeDriver } from './helpers/driver-payload';
+import { SEED_PASSWORD } from './../prisma/seed-password';
 describe('Medical Fitness & Privacy Workflow (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -82,27 +83,27 @@ describe('Medical Fitness & Privacy Workflow (e2e)', () => {
     const [rCoord, rLic, rTrn, rInst, rExam, rMed] = await Promise.all([
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-COORD-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-COORD-001', password: SEED_PASSWORD })
         .expect(200),
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-LIC-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-LIC-001', password: SEED_PASSWORD })
         .expect(200),
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-TRN-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-TRN-001', password: SEED_PASSWORD })
         .expect(200),
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-INST-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-INST-001', password: SEED_PASSWORD })
         .expect(200),
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-EXAM-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-EXAM-001', password: SEED_PASSWORD })
         .expect(200),
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-MED-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-MED-001', password: SEED_PASSWORD })
         .expect(200),
     ]);
 

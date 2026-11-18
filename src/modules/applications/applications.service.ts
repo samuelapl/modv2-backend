@@ -2,6 +2,7 @@ import { Injectable, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   AppBadRequestException,
+  AppConflictException,
   AppForbiddenException,
   AppNotFoundException,
 } from '../../common/errors';
@@ -33,6 +34,7 @@ import { createExistingPermitCredentialInTx } from '../credentials/helpers/exist
 import {
   DIRECT_APPROVAL_TYPES,
   OPEN_APPLICATION_STATUSES,
+  IN_FLIGHT_APPLICATION_STATUSES,
   formatStageLabel,
   getPostScreeningStages,
   resolveNextStage,
@@ -484,6 +486,8 @@ export class ApplicationsService {
     }
 
     const lookup = await loadPriorPermitLookup(this.prisma, [dto.priorPermit]);
+    await this.assertNoOtherOpenApplication(driver.id);
+
     if (!driver.dateOfBirth) {
       throw new AppBadRequestException(
         'DRIVER_DOB_REQUIRED_FOR_PRIOR_PERMIT',
@@ -604,6 +608,9 @@ export class ApplicationsService {
         `An existing-permit case (${inFlight.applicationNumber}) is already open for you.`,
       );
     }
+
+    // ...and any other case in flight (for example a new authorization) blocks it too.
+    await this.assertNoOtherOpenApplication(driver.id);
 
     if (!driver.dateOfBirth) {
       throw new AppBadRequestException(
@@ -1455,6 +1462,28 @@ export class ApplicationsService {
   }
 
   /** An open existing-permit declaration blocks starting a new application. */
+  /**
+   * One case at a time: a driver with any application still in flight (submitted up to
+   * approval, or returned for correction) cannot start another or declare a permit.
+   */
+  private async assertNoOtherOpenApplication(driverProfileId: string) {
+    const open = await this.prisma.application.findFirst({
+      where: {
+        driverProfileId,
+        status: { in: IN_FLIGHT_APPLICATION_STATUSES },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { applicationNumber: true },
+    });
+    if (open) {
+      throw new AppConflictException(
+        'OPEN_APPLICATION_EXISTS',
+        { application: open.applicationNumber },
+        `An application (${open.applicationNumber}) is already in progress for this driver. Wait for its outcome before starting another.`,
+      );
+    }
+  }
+
   private async assertNoOpenDeclaration(driverProfileId: string) {
     const open = await this.prisma.application.findFirst({
       where: {

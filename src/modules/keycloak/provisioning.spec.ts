@@ -63,6 +63,16 @@ describe('provisioning', () => {
       );
     });
 
+    it('starts the profile with the identity check approved', async () => {
+      const p = writer();
+      await ensureDriverProfile(p, user());
+      expect(p.driverProfile.upsert.mock.calls[0][0].create).toEqual(
+        expect.objectContaining({ identityVerifiedAt: expect.any(Date), identityVerifiedBy: 'SYSTEM' }),
+      );
+      // Re-running must not re-stamp an existing profile.
+      expect(p.driverProfile.upsert.mock.calls[0][0].update).toEqual({});
+    });
+
     it('does nothing for a user without the STAFF_DRIVER role', async () => {
       const p = writer();
       await expect(ensureDriverProfile(p, user({ roles: ['AUDITOR'] }))).resolves.toBeNull();

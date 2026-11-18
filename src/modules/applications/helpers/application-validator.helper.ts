@@ -10,7 +10,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import {
-  OPEN_APPLICATION_STATUSES,
+  IN_FLIGHT_APPLICATION_STATUSES,
   calculateDriverAge,
 } from './application-state.helper';
 
@@ -148,19 +148,18 @@ export async function validateApplicationPrerequisites(
         ? { id: { not: params.excludeApplicationId } }
         : {}),
       driverProfileId: driver.id,
-      status: { in: OPEN_APPLICATION_STATUSES },
-      requestedCategories: {
-        some: { categoryId: { in: uniqueCategoryIds } },
-      },
+      status: { in: IN_FLIGHT_APPLICATION_STATUSES },
     },
+    orderBy: { createdAt: 'desc' },
     select: { applicationNumber: true },
   });
 
+  // One case at a time per driver, whatever its categories or type.
   if (existingOpen) {
     throw new AppConflictException(
-      'OPEN_APPLICATION_EXISTS_FOR_CATEGORIES',
+      'OPEN_APPLICATION_EXISTS',
       { application: existingOpen.applicationNumber },
-      `An open application (${existingOpen.applicationNumber}) already covers one or more selected categories for this driver.`,
+      `An application (${existingOpen.applicationNumber}) is already in progress for this driver. Wait for its outcome before starting another.`,
     );
   }
 

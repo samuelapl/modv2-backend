@@ -585,6 +585,16 @@ describe('DriversService', () => {
       expect(data.profileCompletedAt).toBeNull();
     });
 
+    it('approves the identity check at registration, attributed to the system', async () => {
+      const { txDriverCreate } = mockCreateTx();
+
+      await service.create(lean, admin);
+
+      const data = txDriverCreate.mock.calls[0][0].data;
+      expect(data.identityVerifiedAt).toEqual(expect.any(Date));
+      expect(data.identityVerifiedBy).toBe('SYSTEM');
+    });
+
     it('does not return a temporary password when the admin supplied one', async () => {
       mockCreateTx();
       const created: any = await service.create(
@@ -765,6 +775,32 @@ describe('DriversService', () => {
           expect(res.lockedFields).toEqual(['dateOfBirth', 'bloodGroup']);
           expect(res.permitState).toBe('NONE');
           expect(res.missingFields).toContain('emergencyContactPhone');
+        });
+
+        it('sends the open application to the client so it can stop offering a second one', async () => {
+          const open = {
+            id: 'app-1',
+            applicationNumber: 'APP-2026-00002',
+            type: 'NEW_AUTHORIZATION',
+            status: 'SUBMITTED',
+            currentStage: 'Submitted for Screening',
+          };
+          prisma.driverProfile.findUnique.mockResolvedValue({ ...adminFilled, unit: {}, user: {} });
+          // Only the open-case lookup (type is "not PRE_TRAINED") finds it; no declaration.
+          prisma.application.findFirst.mockImplementation(async ({ where }: any) =>
+            where.type?.not ? open : null,
+          );
+
+          const res: any = await service.findMine('user-1');
+
+          expect(res.permitState).toBe('NONE');
+          expect(res.activeApplication).toEqual(open);
+        });
+
+        it('reports no open application when none is in flight', async () => {
+          prisma.driverProfile.findUnique.mockResolvedValue({ ...adminFilled, unit: {}, user: {} });
+          const res: any = await service.findMine('user-1');
+          expect(res.activeApplication).toBeNull();
         });
 
         it('refuses to change one, and saves nothing', async () => {

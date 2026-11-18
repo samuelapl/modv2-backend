@@ -128,6 +128,14 @@ describe('Existing-permit declaration (driver declares, officer verifies)', () =
       ).rejects.toThrow(/already open/i);
     });
 
+    it('refuses to declare a permit while another application is in flight', async () => {
+      mockPrisma.application.findFirst
+        .mockResolvedValueOnce(null) // no other declaration
+        .mockResolvedValueOnce({ applicationNumber: 'APP-2026-00042' }); // a new-authorization case
+      await expect(service.declarePermit(input() as any, driverUser)).rejects.toThrow(/in progress/i);
+      expect(mockTx.application.create).not.toHaveBeenCalled();
+    });
+
     it('refuses a permit number that is already recorded', async () => {
       mockPrisma.priorPermit.findMany.mockResolvedValue([
         { permitNumber: 'MOD-P-77' },
@@ -287,6 +295,55 @@ describe('Existing-permit declaration (driver declares, officer verifies)', () =
       expect(r.permitState).toBe('RETURNED');
       expect(r.declaration?.reason).toBe('Scan unreadable');
     });
+    describe('activeApplication', () => {
+      // The open-case lookup excludes declarations (type != PRE_TRAINED); the declaration
+      // lookup is the PRE_TRAINED one. Answer each from its own query.
+      const split = (creds: any[], other: any, declaration: any = null) => ({
+        issuedCredential: { findMany: jest.fn().mockResolvedValue(creds) },
+        application: {
+          findFirst: jest.fn(async ({ where }: any) =>
+            where.type?.not === ApplicationType.PRE_TRAINED ? other : declaration,
+          ),
+        },
+      });
+      const open = {
+        id: 'app-9',
+        applicationNumber: 'APP-2026-00009',
+        type: ApplicationType.NEW_AUTHORIZATION,
+        status: ApplicationStatus.TRAINING_PENDING,
+        currentStage: 'TRAINING',
+      };
+
+      it('reports a new-authorization case in flight, with the permit state still NONE', async () => {
+        const r = await resolvePermitState(split([], open), driver);
+        expect(r.permitState).toBe('NONE');
+        expect(r.activeApplication).toEqual(open);
+      });
+
+      it('is null when nothing is in flight', async () => {
+        expect((await resolvePermitState(split([], null), driver)).activeApplication).toBeNull();
+      });
+
+      it('is reported alongside a current permit (for example a renewal in flight)', async () => {
+        const r = await resolvePermitState(
+          split([cred({})], { ...open, type: ApplicationType.RENEWAL }),
+          driver,
+        );
+        expect(r.permitState).toBe('CARD_ISSUED');
+        expect(r.activeApplication?.type).toBe(ApplicationType.RENEWAL);
+      });
+
+      it('only looks at in-flight, non-declaration cases', async () => {
+        const c = split([], null);
+        await resolvePermitState(c, driver);
+        const where = c.application.findFirst.mock.calls.find(([a]: any[]) => a.where.type?.not)![0].where;
+        expect(where.type).toEqual({ not: ApplicationType.PRE_TRAINED });
+        expect(where.status.in).not.toContain(ApplicationStatus.APPROVED);
+        expect(where.status.in).not.toContain(ApplicationStatus.REJECTED);
+        expect(where.status.in).toContain(ApplicationStatus.RETURNED_FOR_CORRECTION);
+      });
+    });
+
     it('an officer-recorded case never asks the driver to act', async () => {
       const r = await resolvePermitState(
         client([], {

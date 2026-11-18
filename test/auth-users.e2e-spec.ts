@@ -5,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 import { Permission } from './../src/common/enums/permissions.enum';
+import { SEED_PASSWORD } from './../prisma/seed-password';
 
 describe('Auth & Users PBAC (e2e)', () => {
   let app: INestApplication;
@@ -39,7 +40,7 @@ describe('Auth & Users PBAC (e2e)', () => {
   it('POST /api/v1/auth/login - authenticates MOD-ADMIN-001', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-ADMIN-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-ADMIN-001', password: SEED_PASSWORD })
       .expect(200);
 
     expect(res.body.success).toBe(true);
@@ -51,7 +52,7 @@ describe('Auth & Users PBAC (e2e)', () => {
   it('POST /api/v1/auth/login - authenticates MOD-COORD-001', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-COORD-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-COORD-001', password: SEED_PASSWORD })
       .expect(200);
 
     coordToken = res.body.data.accessToken;

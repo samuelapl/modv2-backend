@@ -339,7 +339,7 @@ describe('ApplicationsService', () => {
     expect(created.status).toBe(ApplicationStatus.SUBMITTED);
   });
 
-  it('rejects duplicate in-flight applications for same driver & category', async () => {
+  it('rejects a second application while one is in flight for the driver, whatever its categories', async () => {
     mockPrisma.driverProfile.findUnique
       .mockResolvedValueOnce({ id: 'drv-1', userId: 'user-drv-1', unitId: 'unit-1' })
       .mockResolvedValueOnce({
@@ -379,6 +379,25 @@ describe('ApplicationsService', () => {
         coordinatorUser,
       ),
     ).rejects.toThrow(ConflictException);
+
+    // The rule is per driver, not per category: nothing narrows the lookup to the requested
+    // categories, and finished cases (approved, rejected, draft) do not count.
+    const where = mockPrisma.application.findFirst.mock.calls.at(-1)[0].where;
+    expect(where.driverProfileId).toBe('drv-1');
+    expect(where.requestedCategories).toBeUndefined();
+    expect(where.status.in).toEqual(
+      expect.arrayContaining([
+        ApplicationStatus.SUBMITTED,
+        ApplicationStatus.SCREENING,
+        ApplicationStatus.TRAINING_PENDING,
+        ApplicationStatus.READY_FOR_APPROVAL,
+        ApplicationStatus.PENDING_VERIFICATION,
+        ApplicationStatus.RETURNED_FOR_CORRECTION,
+      ]),
+    );
+    for (const finished of [ApplicationStatus.DRAFT, ApplicationStatus.APPROVED, ApplicationStatus.REJECTED]) {
+      expect(where.status.in).not.toContain(finished);
+    }
   });
 
   it('routes REPLACEMENT to READY_FOR_APPROVAL on screening', async () => {

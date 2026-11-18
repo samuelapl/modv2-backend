@@ -17,7 +17,7 @@
  *   - npm run prisma:seed:demo -- --reset-only   wipes them and stops.
  *
  * Every demo driver logs in with:  serviceNumber MOD-DEMO-001 ... MOD-DEMO-100
- * password MoD@2026!   (same as the base seed accounts)
+ * password Password12   (same as the base seed accounts)
  *
  * Data is deterministic (fixed pseudo-random seed); only dates move, because
  * they are computed relative to the day you run the seed.
@@ -40,6 +40,7 @@ import {
   InvestigationStatus,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { SEED_PASSWORD } from './seed-password';
 import * as crypto from 'crypto';
 import { signCredentialPayload } from '../src/modules/credentials/helpers/qr-signer.helper';
 
@@ -48,7 +49,7 @@ const prisma = new PrismaClient();
 const DEMO_PREFIX = 'MOD-DEMO-';
 const TOTAL = 100;
 const DAY = 24 * 60 * 60 * 1000;
-const DEFAULT_PASSWORD = 'MoD@2026!';
+const DEFAULT_PASSWORD = SEED_PASSWORD;
 
 // Must match the secret the backend signs/verifies QR tokens with, otherwise
 // QR verification of seeded permits would say "tampered".

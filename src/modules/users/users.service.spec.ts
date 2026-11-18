@@ -176,6 +176,9 @@ describe('UsersService', () => {
           rank: 'Corporal',
           contactPhone: '+251911000500',
           unitId,
+          // Approved automatically: no officer has to verify a newly created driver.
+          identityVerifiedAt: expect.any(Date),
+          identityVerifiedBy: 'SYSTEM',
         },
       });
     });

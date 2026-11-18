@@ -1,5 +1,7 @@
 import { PrismaClient, SystemRole, PersonnelStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { SEED_PASSWORD } from './seed-password';
+import { autoVerifiedIdentity } from '../src/modules/personnel/helpers/identity-verification.helper';
 import { Permission } from '../src/common/enums/permissions.enum';
 
 const prisma = new PrismaClient();
@@ -392,7 +394,7 @@ async function main() {
   // -------------------------------------------------------------------------
   // 4. Seed Test Accounts for ALL 12 Official MoD Roles
   // -------------------------------------------------------------------------
-  const defaultPassword = await bcrypt.hash('MoD@2026!', 10);
+  const defaultPassword = await bcrypt.hash(SEED_PASSWORD, 10);
 
   const testAccounts = [
     {
@@ -568,6 +570,7 @@ async function main() {
           middleName: 'Tesfaye',
           lastName: 'Bogale',
           fullName: 'Dawit Tesfaye Bogale',
+          ...autoVerifiedIdentity(),
         },
       },
     },
@@ -604,12 +607,13 @@ async function main() {
           // Dev convenience: the demo driver can apply straight away (no photo to upload).
           profileStatus: 'COMPLETE',
           profileCompletedAt: new Date(),
+          ...autoVerifiedIdentity(),
         },
       },
     },
   });
 
-  console.log('Seeded all 12 test user accounts (Default password: MoD@2026!)');
+  console.log(`Seeded all 12 test user accounts (Default password: ${SEED_PASSWORD})`);
   console.log('--- Seed Completed Successfully! ---');
 }
 

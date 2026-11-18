@@ -7,6 +7,7 @@ import { TransformInterceptor } from './../src/common/interceptors/transform.int
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
 
 import { completeDriver } from './helpers/driver-payload';
+import { SEED_PASSWORD } from './../prisma/seed-password';
 describe('National License Verification (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -57,20 +58,20 @@ describe('National License Verification (e2e)', () => {
   it('Authenticates Coordinator, Licensing Admin, and Candidate', async () => {
     const resCoord = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-COORD-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-COORD-001', password: SEED_PASSWORD })
       .expect(200);
     coordToken = resCoord.body.data.accessToken;
     coordUnitId = resCoord.body.data.user.unitId;
 
     const resLic = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-LIC-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-LIC-001', password: SEED_PASSWORD })
       .expect(200);
     licAdminToken = resLic.body.data.accessToken;
 
     const resCand = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-88219', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-88219', password: SEED_PASSWORD })
       .expect(200);
     candidateToken = resCand.body.data.accessToken;
   });

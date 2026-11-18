@@ -2,7 +2,7 @@
  * Keycloak Seed Bootstrap Script
  *
  * Provisions default test/seed users from IDLMS database into Keycloak
- * realm `mod-defense`, setting their password to `MoD@2026!` and linking
+ * realm `mod-defense`, setting their password to `Password12` and linking
  * their `keycloakId` back to the IDLMS database.
  *
  * Usage:
@@ -10,11 +10,12 @@
  */
 import { PrismaClient } from '@prisma/client';
 import { KeycloakAdminService } from '../src/modules/keycloak/keycloak-admin.service';
+import { SEED_PASSWORD } from './seed-password';
 
 const prisma = new PrismaClient();
 const adminService = new KeycloakAdminService();
 
-const DEV_DEFAULT_PASSWORD = process.env.KEYCLOAK_DEV_PASSWORD || 'MoD@2026!';
+const DEV_DEFAULT_PASSWORD = process.env.KEYCLOAK_DEV_PASSWORD || SEED_PASSWORD;
 
 async function main() {
   console.log('--- Starting Keycloak User Bootstrap ---');

@@ -11,7 +11,7 @@ export class LoginDto {
   serviceNumber: string;
 
   @ApiProperty({
-    example: 'MoD@2026!',
+    example: 'Password12',
     description: 'Staff portal password',
   })
   @IsString()

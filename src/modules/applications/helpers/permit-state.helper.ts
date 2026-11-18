@@ -3,6 +3,7 @@ import {
   ApplicationType,
   CredentialStatus,
 } from '@prisma/client';
+import { IN_FLIGHT_APPLICATION_STATUSES } from './application-state.helper';
 
 /**
  * Where a driver stands with respect to an MoD driving permit. Drives which
@@ -27,6 +28,18 @@ export interface PermitStateResult {
     issueDate: Date;
     expiryDate: Date;
     categories: { id: string; code: string; name: string }[];
+  } | null;
+  /**
+   * The driver's other case still in flight (new authorization, renewal, ...), if any.
+   * Existing-permit declarations are reported in `declaration` instead. While this is set the
+   * driver cannot start another application.
+   */
+  activeApplication: {
+    id: string;
+    applicationNumber: string;
+    type: ApplicationType;
+    status: ApplicationStatus;
+    currentStage: string | null;
   } | null;
   /** The existing-permit application still in flight (declared or recorded). */
   declaration: {
@@ -72,6 +85,23 @@ export async function resolvePermitState(
     credentials[0] ??
     null;
 
+  const activeApplication =
+    (await client.application.findFirst({
+      where: {
+        driverProfileId: driver.id,
+        type: { not: ApplicationType.PRE_TRAINED },
+        status: { in: IN_FLIGHT_APPLICATION_STATUSES },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        applicationNumber: true,
+        type: true,
+        status: true,
+        currentStage: true,
+      },
+    })) ?? null;
+
   if (current) {
     return {
       permitState: current.cardIssued ? 'CARD_ISSUED' : 'EXISTING_PERMIT',
@@ -84,6 +114,7 @@ export async function resolvePermitState(
         expiryDate: current.expiryDate,
         categories: current.categories.map((c: any) => c.category),
       },
+      activeApplication,
       declaration: null,
     };
   }
@@ -103,7 +134,9 @@ export async function resolvePermitState(
       rejectionReason: true,
     },
   });
-  if (!pending) return { permitState: 'NONE', permit: null, declaration: null };
+  if (!pending) {
+    return { permitState: 'NONE', permit: null, activeApplication, declaration: null };
+  }
 
   const declaredByDriver = pending.createdById === driver.userId;
   const returned = pending.status === ApplicationStatus.RETURNED_FOR_CORRECTION;
@@ -112,6 +145,7 @@ export async function resolvePermitState(
     permitState:
       returned && declaredByDriver ? 'RETURNED' : 'PENDING_VERIFICATION',
     permit: null,
+    activeApplication,
     declaration: {
       applicationId: pending.id,
       applicationNumber: pending.applicationNumber,

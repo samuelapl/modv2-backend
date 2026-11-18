@@ -5,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
+import { SEED_PASSWORD } from './../prisma/seed-password';
 
 describe('Personnel & MinIO Storage (e2e)', () => {
   let app: INestApplication;
@@ -47,14 +48,14 @@ describe('Personnel & MinIO Storage (e2e)', () => {
   it('Authenticates Coordinator & Licensing Admin', async () => {
     const res1 = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-COORD-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-COORD-001', password: SEED_PASSWORD })
       .expect(200);
     coordToken = res1.body.data.accessToken;
     logUnitId = res1.body.data.user.unitId;
 
     const res2 = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ serviceNumber: 'MOD-LIC-001', password: 'MoD@2026!' })
+      .send({ serviceNumber: 'MOD-LIC-001', password: SEED_PASSWORD })
       .expect(200);
     licAdminToken = res2.body.data.accessToken;
   });

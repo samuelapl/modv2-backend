@@ -5,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
+import { SEED_PASSWORD } from './../prisma/seed-password';
 
 /**
  * Full onboarding journey: admin registers basic accounts -> forced password
@@ -58,12 +59,12 @@ describe('Driver onboarding (e2e)', () => {
   });
 
   it('seeded accounts are unaffected (no forced change)', async () => {
-    const admin = await login('MOD-ADMIN-001', 'MoD@2026!').expect(200);
+    const admin = await login('MOD-ADMIN-001', SEED_PASSWORD).expect(200);
     expect(admin.body.data.user.mustChangePassword).toBe(false);
     expect(admin.body.data.user.profileStatus).toBeNull();
     adminToken = admin.body.data.accessToken;
 
-    const coord = await login('MOD-COORD-001', 'MoD@2026!').expect(200);
+    const coord = await login('MOD-COORD-001', SEED_PASSWORD).expect(200);
     coordToken = coord.body.data.accessToken;
     unitId = coord.body.data.user.unitId;
 

@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { SystemRole } from '@prisma/client';
+import { autoVerifiedIdentity } from '../personnel/helpers/identity-verification.helper';
 
 const logger = new Logger('KeycloakProvisioning');
 
@@ -117,6 +118,7 @@ export async function ensureDriverProfile(
       rank: user.rank,
       contactPhone: user.phone,
       unitId: user.unitId,
+      ...autoVerifiedIdentity(),
     },
     update: {},
   });

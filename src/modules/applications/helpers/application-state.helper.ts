@@ -10,6 +10,16 @@ export const OPEN_APPLICATION_STATUSES: ApplicationStatus[] = [
   ApplicationStatus.READY_FOR_APPROVAL,
 ];
 
+/**
+ * A driver may have only one case in flight at a time: everything from submission up to
+ * approval, plus a case returned for correction (it must be corrected and resubmitted, not
+ * duplicated). DRAFT, APPROVED and REJECTED are not in flight.
+ */
+export const IN_FLIGHT_APPLICATION_STATUSES: ApplicationStatus[] = [
+  ...OPEN_APPLICATION_STATUSES,
+  ApplicationStatus.RETURNED_FOR_CORRECTION,
+];
+
 export const SCREENABLE_STATUSES: ApplicationStatus[] = [
   ApplicationStatus.SUBMITTED,
   ApplicationStatus.SCREENING,

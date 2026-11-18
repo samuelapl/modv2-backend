@@ -13,6 +13,7 @@ import { QueryUsersDto } from './dto/query-users.dto';
 import { UpdateRolePermissionsDto } from './dto/update-role-permissions.dto';
 import { PERMISSION_CATALOG } from './constants/permission-catalog';
 import { AppBadRequestException, AppConflictException, AppNotFoundException } from '../../common/errors';
+import { autoVerifiedIdentity } from '../personnel/helpers/identity-verification.helper';
 
 /** Roles whose permissions are scoped to a single organizational unit. */
 const UNIT_SCOPED_ROLES: SystemRole[] = [
@@ -54,6 +55,7 @@ function newDriverProfile(user: {
       rank: user.rank,
       contactPhone: user.phone,
       unitId: user.unitId,
+      ...autoVerifiedIdentity(),
     },
   };
 }

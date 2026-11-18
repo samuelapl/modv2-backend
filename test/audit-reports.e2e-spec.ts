@@ -5,6 +5,7 @@ import { AppModule } from './../src/app.module';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { TransformInterceptor } from './../src/common/interceptors/transform.interceptor';
 import { AllExceptionsFilter } from './../src/common/filters/http-exception.filter';
+import { SEED_PASSWORD } from './../prisma/seed-password';
 
 describe('Audit Trails & Executive Reports (e2e)', () => {
   let app: INestApplication;
@@ -47,19 +48,19 @@ describe('Audit Trails & Executive Reports (e2e)', () => {
     const [rAdmin, rAudit, rCmdr, rGuard] = await Promise.all([
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-ADMIN-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-ADMIN-001', password: SEED_PASSWORD })
         .expect(200),
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-AUDIT-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-AUDIT-001', password: SEED_PASSWORD })
         .expect(200),
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-CMDR-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-CMDR-001', password: SEED_PASSWORD })
         .expect(200),
       request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ serviceNumber: 'MOD-GUARD-001', password: 'MoD@2026!' })
+        .send({ serviceNumber: 'MOD-GUARD-001', password: SEED_PASSWORD })
         .expect(200),
     ]);
 
