@@ -64,7 +64,9 @@ export const PERMISSION_CATALOG: PermissionCatalogGroup[] = [
   {
     group: 'Credentials, Dispatch & Safety',
     permissions: [
-      { key: Permission.CREDENTIALS_ISSUE, label: 'Issue & Print MoD Credentials' },
+      { key: Permission.CREDENTIALS_ISSUE, label: 'Issue MoD Credentials' },
+      { key: Permission.CREDENTIALS_PRINT, label: 'Print PVC Permit Cards (one-time)' },
+      { key: Permission.CREDENTIALS_REPRINT_OVERRIDE, label: 'Authorize Card Reprint (Supervisor)' },
       { key: Permission.CREDENTIALS_VIEW_OWN, label: 'View Own Digital Credential' },
       { key: Permission.CREDENTIALS_VERIFY_QR, label: 'Verify QR Credentials' },
       { key: Permission.ELIGIBILITY_CHECK, label: 'Run Vehicle Dispatch Checks' },

@@ -15,6 +15,15 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { Permission } from '../../common/enums/permissions.enum';
 import { CredentialsService } from './credentials.service';
+import { signCredentialPayload } from './helpers/qr-signer.helper';
+
+/** Statutory fields a driver needs before a card can be issued. */
+const CARD_FIELDS = {
+  rank: 'Sgt.',
+  bloodGroup: 'O+',
+  dateOfBirth: new Date('1990-05-01'),
+  fullNameAm: 'ክብረት መንግስቱ ዘውዴ',
+};
 
 describe('CredentialsService', () => {
   let service: CredentialsService;
@@ -40,6 +49,8 @@ describe('CredentialsService', () => {
       findUniqueOrThrow: jest.fn(),
       count: jest.fn(),
     },
+    cardReprint: { findUnique: jest.fn() },
+    driverProfile: { findUnique: jest.fn() },
     $transaction: jest.fn((fn: (tx: any) => any) => fn(mockTx)),
   };
 
@@ -122,6 +133,7 @@ describe('CredentialsService', () => {
         id: 'drv-1',
         userId: 'u-drv-1',
         serviceNumber: 'MOD-1234',
+        ...CARD_FIELDS,
         personnelStatus: PersonnelStatus.ACTIVE,
         medicalReviews: [
           {
@@ -198,6 +210,7 @@ describe('CredentialsService', () => {
         id: 'drv-up',
         userId: 'u-drv-up',
         serviceNumber: 'MOD-UP-1',
+        ...CARD_FIELDS,
         personnelStatus: PersonnelStatus.ACTIVE,
         medicalReviews: [{ outcome: MedicalFitnessOutcome.FIT, operationalRestrictions: [] }],
         suspensions: [],
@@ -272,6 +285,7 @@ describe('CredentialsService', () => {
         id: 'drv-rp',
         userId: 'u-drv-rp',
         serviceNumber: 'MOD-RP-1',
+        ...CARD_FIELDS,
         personnelStatus: PersonnelStatus.ACTIVE,
         // A newer medical must not change a replacement card's restrictions.
         medicalReviews: [{ outcome: MedicalFitnessOutcome.FIT, operationalRestrictions: [] }],
@@ -438,100 +452,86 @@ describe('CredentialsService', () => {
     expect(res.results[1].error).toContain('active suspension');
   });
 
+  it('blocks card issuance when statutory fields are missing', async () => {
+    mockPrisma.application.findUnique.mockResolvedValue({
+      id: 'app-blocked',
+      type: ApplicationType.NEW_AUTHORIZATION,
+      status: ApplicationStatus.APPROVED,
+      currentStage: 'Approved',
+      driverProfile: {
+        id: 'drv-b',
+        userId: 'u-b',
+        serviceNumber: 'MOD-B-1',
+        personnelStatus: PersonnelStatus.ACTIVE,
+        rank: 'Sgt.',
+        bloodGroup: null,
+        dateOfBirth: new Date('1990-05-01'),
+        fullNameAm: '  ',
+        medicalReviews: [],
+        suspensions: [],
+      },
+      requestedCategories: [],
+    });
+
+    await expect(
+      service.issueFromApplication({ applicationId: 'app-blocked' }, issuerUser),
+    ).rejects.toThrow(/Blood Group, Amharic Full Name/);
+    expect(mockTx.issuedCredential.create).not.toHaveBeenCalled();
+  });
+
+  it('verify-qr answers CARD_REPLACED for the old QR of a reprinted card', async () => {
+    const oldToken = signCredentialPayload(
+      { cred: 'MOD-AUTH-2026-0042', serial: 'SN-OLD', drv: 'MOD-1', cats: ['CAT-HV'], exp: '2099-01-01T00:00:00.000Z' },
+      'unit_test_qr_secret_2026',
+    );
+    // The old token no longer matches any credential row (the row now holds the new QR)...
+    mockPrisma.issuedCredential.findFirst.mockResolvedValue(null);
+    // ...but its serial is on record as replaced.
+    mockPrisma.cardReprint.findUnique.mockResolvedValue({
+      createdAt: new Date('2026-11-01'),
+      reasonCode: 'DAMAGED',
+    });
+
+    const res: any = await service.verifyQrToken(oldToken);
+
+    expect(mockPrisma.cardReprint.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { oldSerial: 'SN-OLD' } }),
+    );
+    expect(res.status).toBe('CARD_REPLACED');
+    expect(res.valid).toBe(false);
+    expect(res.cryptographicValid).toBe(true);
+    expect(res.credential).toBeNull();
+  });
+
+  it('verify-qr still answers NOT_FOUND for a genuine signature that was never recorded', async () => {
+    const token = signCredentialPayload(
+      { cred: 'X', serial: 'SN-UNKNOWN', drv: 'D', cats: [], exp: '2099-01-01T00:00:00.000Z' },
+      'unit_test_qr_secret_2026',
+    );
+    mockPrisma.issuedCredential.findFirst.mockResolvedValue(null);
+    mockPrisma.cardReprint.findUnique.mockResolvedValue(null);
+    const res: any = await service.verifyQrToken(token);
+    expect(res.status).toBe('NOT_FOUND');
+  });
+
+  it('readiness lists the statutory fields still missing', async () => {
+    mockPrisma.driverProfile.findUnique.mockResolvedValue({
+      serviceNumber: 'MOD-1',
+      rank: 'Sgt.',
+      bloodGroup: null,
+      dateOfBirth: new Date('1990-01-01'),
+      fullNameAm: null,
+    });
+    await expect(service.getIssuanceReadiness('drv-1')).resolves.toEqual({
+      ready: false,
+      missing: ['bloodGroup', 'fullNameAm'],
+    });
+  });
+
   it('rejects tampered QR token during verification', async () => {
     const res = await service.verifyQrToken('IDLMS1.tamperedPayload.deadbeef');
     expect(res.cryptographicValid).toBe(false);
     expect(res.valid).toBe(false);
     expect(res.status).toBe('INVALID_SIGNATURE');
-  });
-
-  describe('recordPrint', () => {
-    it('allows credential issuer to print once and writes audit trail', async () => {
-      const mockCred = {
-        id: 'cred-print-1',
-        credentialNumber: 'MOD-AUTH-2026-0042',
-        serialNumber: 'SN-2026-0042',
-        printCount: 0,
-        printedAt: null,
-        qrHashSignature: 'mock-sig',
-        cardIssued: true,
-        status: CredentialStatus.ACTIVE,
-        expiryDate: new Date('2028-01-01'),
-        driverProfile: {
-          fullName: 'Sgt. Kebede Balcha',
-          serviceNumber: 'ND-91001',
-        },
-      };
-
-      mockPrisma.issuedCredential.findUnique.mockResolvedValue(mockCred);
-      mockTx.issuedCredential.update.mockResolvedValue({
-        ...mockCred,
-        printCount: 1,
-        printedAt: new Date(),
-        printedById: issuerUser.id,
-      });
-
-      const res = await service.recordPrint('cred-print-1', issuerUser);
-      expect(res.printCount).toBe(1);
-      expect(mockTx.auditLog.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            action: 'PRINT_CREDENTIAL',
-            entityType: 'IssuedCredential',
-            entityId: 'cred-print-1',
-            newValue: expect.objectContaining({
-              credentialNumber: 'MOD-AUTH-2026-0042',
-              printCount: 1,
-            }),
-          }),
-        }),
-      );
-    });
-
-    it('refuses to print an existing-permit record (no card issued)', async () => {
-      mockPrisma.issuedCredential.findUnique.mockResolvedValue({
-        id: 'cred-nocard',
-        credentialNumber: 'MOD-P-1234',
-        cardIssued: false,
-        printCount: 0,
-        printedAt: null,
-      });
-
-      await expect(
-        service.recordPrint('cred-nocard', issuerUser),
-      ).rejects.toThrow(/no MoD card/i);
-    });
-
-    it('blocks subsequent prints with 409 Conflict', async () => {
-      mockPrisma.issuedCredential.findUnique.mockResolvedValue({
-        id: 'cred-print-2',
-        credentialNumber: 'MOD-AUTH-2026-0043',
-        printCount: 1,
-        printedAt: new Date(),
-        cardIssued: true,
-      });
-
-      await expect(
-        service.recordPrint('cred-print-2', issuerUser),
-      ).rejects.toThrow(/already been printed/i);
-    });
-
-    it('blocks unauthorized users (drivers without CREDENTIALS_ISSUE) from printing', async () => {
-      mockPrisma.issuedCredential.findUnique.mockResolvedValue({
-        id: 'cred-print-3',
-        printCount: 0,
-        printedAt: null,
-      });
-
-      const driverUser: any = {
-        id: 'driver-1',
-        serviceNumber: 'ND-91001',
-        resolvedPermissions: [Permission.CREDENTIALS_VIEW_OWN],
-      };
-
-      await expect(
-        service.recordPrint('cred-print-3', driverUser),
-      ).rejects.toThrow(ForbiddenException);
-    });
   });
 });

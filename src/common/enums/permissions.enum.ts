@@ -42,6 +42,8 @@ export enum Permission {
 
   // 9. Credentials & Digital QR
   CREDENTIALS_ISSUE = 'credentials:issue',
+  CREDENTIALS_PRINT = 'credentials:print',
+  CREDENTIALS_REPRINT_OVERRIDE = 'credentials:reprint_override',
   CREDENTIALS_VIEW_OWN = 'credentials:view_own',
   CREDENTIALS_VERIFY_QR = 'credentials:verify_qr',
 

@@ -66,9 +66,18 @@ export function verifySignedQrToken(
   }
 }
 
-export async function generateQrDataUrl(token: string): Promise<string> {
+/** Signing secret: QR_SIGNING_SECRET, else JWT_SECRET, else a dev fallback. */
+export function resolveQrSecret(config?: { get<T = string>(key: string): T | undefined }): string {
+  return (
+    config?.get<string>('QR_SIGNING_SECRET') ||
+    config?.get<string>('JWT_SECRET') ||
+    'idlms_qr_secret_fallback_2026'
+  );
+}
+
+export async function generateQrDataUrl(token: string, width = 240): Promise<string> {
   return QRCode.toDataURL(token, {
-    width: 240,
+    width,
     margin: 1,
     errorCorrectionLevel: 'M',
   });

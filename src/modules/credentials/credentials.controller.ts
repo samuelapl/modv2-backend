@@ -5,7 +5,9 @@ import {
   Param,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuditMeta, SkipAutoAudit } from '../../common/decorators/audit.decorator';
@@ -22,12 +24,19 @@ import { IssueCredentialDto } from './dto/issue-credential.dto';
 import { BulkIssueCredentialsDto } from './dto/bulk-issue-credentials.dto';
 import { QueryCredentialsDto } from './dto/query-credentials.dto';
 import { VerifyQrDto } from './dto/verify-qr.dto';
+import { ReprintOverrideDto } from './dto/reprint-override.dto';
+import { CardPrintService } from './card/card-print.service';
+import { CardReprintService } from './card/card-reprint.service';
 
 @ApiTags('Credentials')
 @ApiBearerAuth('JWT-auth')
 @Controller('credentials')
 export class CredentialsController {
-  constructor(private readonly service: CredentialsService) {}
+  constructor(
+    private readonly service: CredentialsService,
+    private readonly cardPrint: CardPrintService,
+    private readonly cardReprint: CardReprintService,
+  ) {}
 
   @Public()
   @Get('health')
@@ -72,6 +81,13 @@ export class CredentialsController {
     return this.service.findAll(query, user);
   }
 
+  @Get('readiness/:driverProfileId')
+  @RequirePermissions(Permission.CREDENTIALS_ISSUE)
+  @ApiOperation({ summary: 'Which statutory card fields are still missing for a driver' })
+  getIssuanceReadiness(@Param('driverProfileId') driverProfileId: string) {
+    return this.service.getIssuanceReadiness(driverProfileId);
+  }
+
   @Get(':id')
   @RequireAnyPermission(
     Permission.CREDENTIALS_ISSUE,
@@ -87,15 +103,39 @@ export class CredentialsController {
     return this.service.findOne(id, user);
   }
 
+  /**
+   * Generates the CR80 front+back PDF and, in the same step, takes the
+   * one-time print lock. Answers with raw PDF bytes (not the JSON envelope).
+   */
   @Post(':id/print')
   @SkipAutoAudit()
-  @RequirePermissions(Permission.CREDENTIALS_ISSUE)
-  @ApiOperation({ summary: 'Record official one-time print of driving credential & audit trail' })
-  recordPrint(
+  @RequirePermissions(Permission.CREDENTIALS_PRINT)
+  @ApiOperation({ summary: 'Generate the one-time printable CR80 PVC card (PDF, front + back)' })
+  async printCard(
     @Param('id') id: string,
     @CurrentUser() user: RequestUserContext,
+    @Res() res: Response,
   ) {
-    return this.service.recordPrint(id, user);
+    const { pdf, filename } = await this.cardPrint.printCard(id, user);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${filename}"`,
+      'Content-Length': String(pdf.length),
+      'Cache-Control': 'no-store',
+    });
+    res.end(pdf);
+  }
+
+  @Post(':id/reprint-override')
+  @SkipAutoAudit()
+  @RequirePermissions(Permission.CREDENTIALS_REPRINT_OVERRIDE)
+  @ApiOperation({ summary: 'Supervisor override: replace card serial/QR and allow one more print' })
+  reprintOverride(
+    @Param('id') id: string,
+    @Body() dto: ReprintOverrideDto,
+    @CurrentUser() user: RequestUserContext,
+  ) {
+    return this.cardReprint.authorizeReprint(id, dto.reasonCode, dto.note, user);
   }
 
   @Post('issue')

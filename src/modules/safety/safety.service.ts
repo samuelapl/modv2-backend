@@ -485,6 +485,14 @@ export class SafetyService {
         'Suspension effective date cannot be in the future.',
       );
     }
+    const endDate = dto.endDate ? new Date(dto.endDate) : null;
+    if (endDate && endDate <= startDate) {
+      throw new AppBadRequestException(
+        'SUSPENSION_REVIEW_BEFORE_START',
+        {},
+        'End date must be after the suspension effective date.',
+      );
+    }
     const reviewDate = dto.reviewDate ? new Date(dto.reviewDate) : null;
     if (reviewDate && reviewDate <= startDate) {
       throw new AppBadRequestException(
@@ -502,6 +510,7 @@ export class SafetyService {
           legalBasis: dto.legalBasis.trim(),
           reason: dto.reason.trim(),
           startDate,
+          endDate,
           reviewDate,
           authorizedById: officer.id,
           isActive: true,

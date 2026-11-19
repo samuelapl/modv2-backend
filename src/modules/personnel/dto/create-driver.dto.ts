@@ -43,6 +43,13 @@ export class CreateDriverDto {
   @IsPersonName()
   lastName: string;
 
+  @ApiPropertyOptional({ example: 'ክብረት መንግስቱ ዘውዴ', description: 'Amharic full name (printed on the card; required for issuance).' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^[ሀ-፿\s.'-]+$/, { message: 'fullNameAm must be written in Amharic (Ethiopic) script.' })
+  fullNameAm?: string;
+
   @ApiPropertyOptional({ example: 'Sergeant' })
   @IsOptional()
   @IsString()

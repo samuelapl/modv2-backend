@@ -8,6 +8,7 @@ import {
   AppConflictException,
   AppForbiddenException,
   AppNotFoundException,
+  AppUnprocessableException,
 } from '../../common/errors';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -30,11 +31,17 @@ import {
   effectiveCredentialStatus,
 } from './helpers/credential-status.helper';
 import { createExistingPermitCredentialInTx } from './helpers/existing-permit.helper';
+import { resolveIssuingAuthority } from './helpers/issuing-authority';
+import {
+  getMissingCardFields,
+  missingCardFieldsLabel,
+} from './helpers/issuance-readiness.helper';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EXPIRING_SOON_DAYS = 90;
 import {
   generateQrDataUrl,
+  resolveQrSecret,
   signCredentialPayload,
   verifySignedQrToken,
 } from './helpers/qr-signer.helper';
@@ -52,6 +59,10 @@ const CREDENTIAL_INCLUDE = {
       userId: true,
       serviceNumber: true,
       fullName: true,
+      fullNameAm: true,
+      rank: true,
+      bloodGroup: true,
+      dateOfBirth: true,
       photoUrl: true,
       personnelStatus: true,
       unit: { select: { id: true, code: true, name: true } },
@@ -89,11 +100,7 @@ export class CredentialsService {
   }
 
   private getQrSecret(): string {
-    return (
-      this.configService?.get<string>('QR_SIGNING_SECRET') ||
-      this.configService?.get<string>('JWT_SECRET') ||
-      'idlms_qr_secret_fallback_2026'
-    );
+    return resolveQrSecret(this.configService);
   }
 
   async getStats() {
@@ -319,6 +326,7 @@ export class CredentialsService {
       rows.map(async (row) => ({
         ...row,
         status: effectiveCredentialStatus(row.status, row.expiryDate),
+        issuingAuthority: resolveIssuingAuthority(this.configService),
         // An existing permit has no card, hence no QR.
         qrDataUrl: row.cardIssued
           ? await generateQrDataUrl(row.qrHashSignature)
@@ -364,93 +372,7 @@ export class CredentialsService {
     return {
       ...cred,
       status: effectiveCredentialStatus(cred.status, cred.expiryDate),
-      qrDataUrl,
-    };
-  }
-
-  async recordPrint(id: string, user: RequestUserContext) {
-    const cred = await this.prisma.issuedCredential.findUnique({
-      where: { id },
-      include: CREDENTIAL_INCLUDE,
-    });
-
-    if (!cred) {
-      throw new AppNotFoundException(
-        'CREDENTIAL_NOT_FOUND',
-        {},
-        'Issued credential not found.',
-      );
-    }
-
-    const perms = new Set(user.resolvedPermissions || []);
-    if (!perms.has(Permission.CREDENTIALS_ISSUE)) {
-      throw new AppForbiddenException(
-        'CREDENTIAL_ACCESS_DENIED',
-        {},
-        'Only credential issuers are authorized to print driving permits.',
-      );
-    }
-
-    if (!cred.cardIssued) {
-      throw new AppBadRequestException(
-        'CREDENTIAL_NO_CARD_ISSUED',
-        { credentialNumber: cred.credentialNumber },
-        'No MoD card has been issued for this permit, so there is nothing to print.',
-      );
-    }
-
-    if (cred.printCount > 0 || cred.printedAt) {
-      throw new AppConflictException(
-        'CREDENTIAL_ALREADY_PRINTED',
-        {
-          credentialNumber: cred.credentialNumber,
-          printedAt: cred.printedAt?.toISOString(),
-        },
-        'This driving licence has already been printed. Military regulations permit printing credentials only once.',
-      );
-    }
-
-    const now = new Date();
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const res = await tx.issuedCredential.update({
-        where: { id },
-        data: {
-          printCount: { increment: 1 },
-          printedAt: now,
-          printedById: user.id,
-        },
-        include: CREDENTIAL_INCLUDE,
-      });
-
-      await tx.auditLog.create({
-        data: {
-          userId: user.id,
-          action: 'PRINT_CREDENTIAL',
-          entityType: 'IssuedCredential',
-          entityId: id,
-          oldValue: {
-            printCount: 0,
-            printedAt: null,
-          },
-          newValue: {
-            credentialNumber: cred.credentialNumber,
-            serialNumber: cred.serialNumber,
-            driverName: cred.driverProfile.fullName,
-            driverServiceNumber: cred.driverProfile.serviceNumber,
-            printCount: 1,
-            printedAt: now.toISOString(),
-            printedByServiceNumber: user.serviceNumber,
-          },
-        },
-      });
-
-      return res;
-    });
-
-    const qrDataUrl = await generateQrDataUrl(updated.qrHashSignature);
-    return {
-      ...updated,
-      status: effectiveCredentialStatus(updated.status, updated.expiryDate),
+      issuingAuthority: resolveIssuingAuthority(this.configService),
       qrDataUrl,
     };
   }
@@ -606,6 +528,17 @@ export class CredentialsService {
         include: CREDENTIAL_INCLUDE,
       });
       return { ...full, qrDataUrl: null };
+    }
+
+    // From here a physical card will be issued: the statutory fields must exist.
+    const missingFields = getMissingCardFields(app.driverProfile);
+    if (missingFields.length > 0) {
+      const fields = missingCardFieldsLabel(missingFields);
+      throw new AppUnprocessableException(
+        'CREDENTIAL_ISSUANCE_BLOCKED_MISSING_FIELDS',
+        { fields },
+        `Cannot issue the card: required driver details are missing (${fields}).`,
+      );
     }
 
     // A renewal also replaces a permit that lapsed inside the grace period.
@@ -826,6 +759,29 @@ export class CredentialsService {
     };
   }
 
+  /** Which statutory card fields are still missing for this driver. */
+  async getIssuanceReadiness(driverProfileId: string) {
+    const profile = await this.prisma.driverProfile.findUnique({
+      where: { id: driverProfileId },
+      select: {
+        serviceNumber: true,
+        rank: true,
+        bloodGroup: true,
+        dateOfBirth: true,
+        fullNameAm: true,
+      },
+    });
+    if (!profile) {
+      throw new AppNotFoundException(
+        'CREDENTIAL_NOT_FOUND',
+        {},
+        'Driver profile not found.',
+      );
+    }
+    const missing = getMissingCardFields(profile);
+    return { ready: missing.length === 0, missing };
+  }
+
   async verifyQrToken(token: string) {
     const secret = this.getQrSecret();
     const signatureCheck = verifySignedQrToken(token, secret);
@@ -847,6 +803,24 @@ export class CredentialsService {
     });
 
     if (!credential) {
+      // A genuine signature on a serial that was swapped by a supervisor
+      // reprint: the physical card was replaced and this one is dead.
+      const replaced = signatureCheck.payload?.serial
+        ? await this.prisma.cardReprint.findUnique({
+            where: { oldSerial: signatureCheck.payload.serial },
+            select: { createdAt: true, reasonCode: true },
+          })
+        : null;
+      if (replaced) {
+        return {
+          cryptographicValid: true,
+          valid: false,
+          status: 'CARD_REPLACED',
+          reason: 'This card was replaced by a newer card and is no longer valid.',
+          replacedAt: replaced.createdAt,
+          credential: null,
+        };
+      }
       return {
         cryptographicValid: true,
         valid: false,

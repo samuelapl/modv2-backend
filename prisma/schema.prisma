@@ -81,6 +81,7 @@ model User {
   trainingBatchesCreated TrainingBatch[]        @relation("BatchCreator")
   credentialsRevoked     IssuedCredential[]     @relation("CredentialRevoker")
   credentialsPrinted     IssuedCredential[]     @relation("CredentialPrinter")
+  cardReprints           CardReprint[]          @relation("ReprintAuthorizer")
   suspensionsClosed      SuspensionRecord[]     @relation("SuspensionCloser")
   trainingSessionsLed    TrainingBatchSession[] @relation("BatchInstructor")
   notifications          Notification[]
@@ -120,6 +121,7 @@ model DriverProfile {
   user                  User               @relation(fields: [userId], references: [id])
   serviceNumber         String             @unique
   fullName              String
+  fullNameAm            String? // Amharic full name (printed on the PVC card; required for issuance)
   firstName             String? // given name
   middleName            String? // father's name
   lastName              String? // grandfather's name
@@ -500,6 +502,7 @@ model IssuedCredential {
 
   categories  CredentialCategoryItem[]
   suspensions SuspensionRecord[]
+  reprints    CardReprint[]
 
   replacementApplications Application[] @relation("ReplacedCredential")
 
@@ -508,6 +511,32 @@ model IssuedCredential {
 
   @@index([credentialNumber])
   @@index([qrHashSignature])
+}
+
+enum ReprintReason {
+  DAMAGED
+  LOST
+  STOLEN
+  PRINT_DEFECT
+  DATA_CORRECTION
+}
+
+// A supervisor-authorized reprint: the card serial (and QR) is replaced, the
+// permit itself is unchanged. oldSerial lets a scan of the old QR answer
+// "this card was replaced".
+model CardReprint {
+  id             String           @id @default(uuid())
+  credentialId   String
+  credential     IssuedCredential @relation(fields: [credentialId], references: [id])
+  oldSerial      String           @unique
+  newSerial      String
+  reasonCode     ReprintReason
+  note           String?
+  authorizedById String
+  authorizedBy   User             @relation("ReprintAuthorizer", fields: [authorizedById], references: [id])
+  createdAt      DateTime         @default(now())
+
+  @@index([credentialId])
 }
 
 model CredentialCategoryItem {
@@ -563,6 +592,7 @@ model SuspensionRecord {
   legalBasis      String // Regulation reference or disciplinary ruling
   reason          String
   startDate       DateTime          @default(now())
+  endDate         DateTime? // planned end of the suspension (reinstatedAt records the actual one)
   reviewDate      DateTime?
   reinstatedAt    DateTime?
   revokedAt       DateTime? // Suspension ended by permanent permit revocation

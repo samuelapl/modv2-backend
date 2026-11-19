@@ -41,4 +41,9 @@ export class CreateSuspensionDto {
   @IsOptional()
   @IsDateString()
   reviewDate?: string;
+
+  @ApiPropertyOptional({ example: '2027-01-10', description: 'Planned end of a fixed-term suspension (must be after the start date).' })
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
 }

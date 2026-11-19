@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   ValidateIf,
 } from 'class-validator';
 import { IsPersonName } from '../../../common/utils/person-name.util';
@@ -29,6 +30,13 @@ export class UpdateDriverDto {
   @IsOptional()
   @IsPersonName()
   lastName?: string;
+
+  @ApiPropertyOptional({ example: 'ክብረት መንግስቱ ዘውዴ' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^[ሀ-፿\s.'-]+$/, { message: 'fullNameAm must be written in Amharic (Ethiopic) script.' })
+  fullNameAm?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

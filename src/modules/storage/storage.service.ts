@@ -109,6 +109,14 @@ export class StorageService implements OnModuleInit {
     return this.minioClient.presignedGetObject(bucket, objectKey, expirySeconds);
   }
 
+  /** Reads a stored object fully into memory (small files such as photos only). */
+  async getObjectBuffer(bucket: AllowedBucket, objectKey: string): Promise<Buffer> {
+    const stream = await this.minioClient.getObject(bucket, objectKey);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  }
+
   getStatus() {
     return {
       module: 'storage',
