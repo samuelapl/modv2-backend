@@ -105,6 +105,18 @@ const FEMALE_NAMES = [
   'Liya', 'Marta', 'Meron', 'Rahel', 'Rediet', 'Saron', 'Selam', 'Tigist',
   'Tsion', 'Hana', 'Mahlet', 'Sena',
 ];
+// Amharic spellings, so every demo driver has the Amharic full name a card needs.
+const AM_NAMES: Record<string, string> = {
+  Abel: 'አቤል', Abebe: 'አበበ', Alemayehu: 'ዓለማየሁ', Amanuel: 'አማኑኤል', Bekele: 'በቀለ', Berhanu: 'ብርሃኑ',
+  Biruk: 'ብሩክ', Dagim: 'ዳግም', Dawit: 'ዳዊት', Elias: 'ኤልያስ', Endalkachew: 'እንዳልካቸው', Eyob: 'ኢዮብ',
+  Fikadu: 'ፍቃዱ', Getachew: 'ጌታቸው', Habtamu: 'ሀብታሙ', Henok: 'ሄኖክ', Kaleab: 'ካሌብ', Kebede: 'ከበደ',
+  Leul: 'ልዑል', Mulugeta: 'ሙሉጌታ', Natnael: 'ናትናኤል', Samuel: 'ሳሙኤል', Tadesse: 'ታደሰ', Tamrat: 'ታምራት',
+  Tesfaye: 'ተስፋዬ', Wondwosen: 'ወንድወሰን', Yared: 'ያሬድ', Yohannes: 'ዮሐንስ', Zerihun: 'ዘሪሁን', Million: 'ሚሊዮን',
+  Aster: 'አስቴር', Bethlehem: 'ቤተልሔም', Birtukan: 'ብርቱካን', Eden: 'ኤደን', Etenesh: 'እትነሽ', Genet: 'ገነት',
+  Hiwot: 'ሕይወት', Kidist: 'ቅድስት', Liya: 'ሊያ', Marta: 'ማርታ', Meron: 'ሜሮን', Rahel: 'ራሄል',
+  Rediet: 'ረድኤት', Saron: 'ሳሮን', Selam: 'ሰላም', Tigist: 'ትግስት', Tsion: 'ጽዮን', Hana: 'ሃና',
+  Mahlet: 'ማህሌት', Sena: 'ሰና',
+};
 const RANKS = [
   'Private', 'Corporal', 'Sergeant', 'Staff Sergeant', 'Warrant Officer',
   'Second Lieutenant', 'Lieutenant', 'Captain', 'Major', 'Civilian Staff',
@@ -348,6 +360,7 @@ async function main() {
     const middleName = pick(MALE_NAMES); // father's name
     const lastName = pick(MALE_NAMES); // grandfather's name
     const fullName = `${firstName} ${middleName} ${lastName}`;
+    const fullNameAm = [firstName, middleName, lastName].map((n) => AM_NAMES[n]).join(' ');
     const unit = units[i % units.length]; // spread evenly over every unit
     const rank = pick(RANKS);
 
@@ -463,6 +476,7 @@ async function main() {
             userId: user.id,
             serviceNumber,
             fullName,
+            fullNameAm,
             firstName,
             middleName,
             lastName,

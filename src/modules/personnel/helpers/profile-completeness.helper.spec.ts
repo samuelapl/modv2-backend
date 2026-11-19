@@ -13,6 +13,7 @@ const complete = {
   gender: 'MALE',
   nationalIdNumber: 'FAN-1',
   bloodGroup: 'O+',
+  fullNameAm: 'ዳዊት ተስፋዬ ቦጋለ',
   emergencyContactName: 'Almaz',
   emergencyContactPhone: '+251911887766',
 };
@@ -40,6 +41,17 @@ describe('profile completeness', () => {
     ]);
   });
 
+  it('requires the Amharic full name (printed on the card)', () => {
+    expect(missingProfileFields({ ...complete, fullNameAm: null })).toEqual(['fullNameAm']);
+    expect(missingProfileFields({ ...complete, fullNameAm: '  ' })).toEqual(['fullNameAm']);
+    expect(profileStatusFor({ ...complete, fullNameAm: undefined })).toBe('INCOMPLETE');
+  });
+
+  it('locks an Amharic name the administrator entered, but not one the driver typed', () => {
+    expect(lockedProfileFields({ ...complete, selfEnteredFields: [] })).toContain('fullNameAm');
+    expect(lockedProfileFields({ ...complete, selfEnteredFields: ['fullNameAm'] })).not.toContain('fullNameAm');
+  });
+
   it('treats blank strings as missing', () => {
     expect(missingProfileFields({ ...complete, nationalIdNumber: '   ' })).toEqual(['nationalIdNumber']);
   });
@@ -56,6 +68,7 @@ describe('profile completeness', () => {
         'dateOfBirth',
         'nationalIdNumber',
         'bloodGroup',
+        'fullNameAm',
         'emergencyContactName',
         'emergencyContactPhone',
       ]);

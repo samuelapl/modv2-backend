@@ -152,6 +152,7 @@ describe('ApplicationsService', () => {
       gender: 'MALE',
       nationalIdNumber: 'FAN-1',
       bloodGroup: 'O+',
+      fullNameAm: 'ዳዊት ተስፋዬ ቦጋለ',
       emergencyContactName: 'Almaz',
       emergencyContactPhone: '+251911887766',
     };
@@ -178,6 +179,14 @@ describe('ApplicationsService', () => {
         },
       });
       expect(mockPrisma.application.create).not.toHaveBeenCalled();
+    });
+
+    it('blocks an application while only the Amharic name is missing', async () => {
+      (service as any).assertProfileComplete.mockRestore();
+      mockPrisma.driverProfile.findUnique.mockResolvedValueOnce({ ...completeProfile, fullNameAm: null });
+      await expect((service as any).assertProfileComplete('drv-1')).rejects.toMatchObject({
+        response: { code: 'PROFILE_INCOMPLETE', params: { fields: 'fullNameAm' } },
+      });
     });
 
     it('lets a complete profile through the gate', async () => {

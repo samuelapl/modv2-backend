@@ -11,6 +11,7 @@ export const REQUIRED_PROFILE_FIELDS = [
   'gender',
   'nationalIdNumber',
   'bloodGroup',
+  'fullNameAm', // printed on the card; typed by the driver (or an admin)
   'emergencyContactName',
   'emergencyContactPhone',
 ] as const;

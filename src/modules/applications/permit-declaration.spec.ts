@@ -37,6 +37,7 @@ describe('Existing-permit declaration (driver declares, officer verifies)', () =
     gender: 'MALE',
     nationalIdNumber: '123',
     bloodGroup: 'A+',
+    fullNameAm: 'አበበ ቢቂላ',
     emergencyContactName: 'Mother',
     emergencyContactPhone: '0911',
     personnelStatus: 'ACTIVE',

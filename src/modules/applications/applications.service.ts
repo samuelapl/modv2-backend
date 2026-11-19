@@ -1519,6 +1519,7 @@ export class ApplicationsService {
         gender: true,
         nationalIdNumber: true,
         bloodGroup: true,
+        fullNameAm: true,
         emergencyContactName: true,
         emergencyContactPhone: true,
       },

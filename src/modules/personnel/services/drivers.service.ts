@@ -743,6 +743,7 @@ export class DriversService {
       gender: dto.gender,
       nationalIdNumber: normalizedNationalId,
       bloodGroup: dto.bloodGroup,
+      fullNameAm: dto.fullNameAm?.trim() || null,
       emergencyContactName: dto.emergencyContactName?.trim() || null,
       emergencyContactPhone: dto.emergencyContactPhone?.trim() || null,
     });
@@ -1063,6 +1064,8 @@ export class DriversService {
           ? data.nationalIdNumber
           : existing.nationalIdNumber,
       bloodGroup: data.bloodGroup ?? existing.bloodGroup,
+      fullNameAm:
+        data.fullNameAm !== undefined ? data.fullNameAm : existing.fullNameAm,
       emergencyContactName:
         data.emergencyContactName !== undefined
           ? data.emergencyContactName

@@ -193,6 +193,7 @@ describe('DriversService', () => {
           nationalIdNumber: 'FAN-123456',
           dateOfBirth: '1995-01-01',
           bloodGroup: 'O+',
+          fullNameAm: 'አበበ ቢቂላ ደምሴ',
           contactPhone: '+251911223344',
           emergencyContactName: 'Almaz',
           emergencyContactPhone: '+251911887766',
@@ -613,6 +614,7 @@ describe('DriversService', () => {
           nationalIdNumber: 'FAN-1',
           dateOfBirth: '1995-03-10',
           bloodGroup: 'O+',
+          fullNameAm: 'አበበ ቢቂላ ደምሴ',
           photoUrl: 'p.jpg',
           emergencyContactName: 'Almaz',
           emergencyContactPhone: '+251911887766',
@@ -695,6 +697,7 @@ describe('DriversService', () => {
             gender: 'MALE',
             nationalIdNumber: 'FAN-1',
             bloodGroup: 'O+',
+            fullNameAm: 'አበበ ቢቂላ ደምሴ',
             emergencyContactName: 'Almaz',
           }) // existing row, only the emergency phone is missing
           .mockResolvedValue(null); // national-id duplicate lookup

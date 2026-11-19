@@ -7,6 +7,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Matches,
 } from 'class-validator';
 import { BLOOD_GROUPS } from './create-driver.dto';
 
@@ -37,6 +38,18 @@ export class UpdateMyProfileDto {
   @IsOptional()
   @IsIn([...BLOOD_GROUPS])
   bloodGroup?: string;
+
+  @ApiPropertyOptional({
+    example: 'ዳዊት ተስፋዬ ቦጋለ',
+    description: 'Full name in Amharic, as it should be printed on the card.',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^[\u1200-\u137F\s.'-]+$/, {
+    message: 'fullNameAm must be written in Amharic (Ethiopic) script.',
+  })
+  fullNameAm?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
