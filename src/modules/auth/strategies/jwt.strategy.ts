@@ -5,6 +5,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Request } from 'express';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { RedisService } from '../../../redis/redis.service';
+import { requireSecret } from '../../../common/utils/secrets';
 import { AppUnauthorizedException } from '../../../common/errors';
 
 export interface JwtPayload {
@@ -23,10 +24,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>(
-        'JWT_SECRET',
-        'idlms_super_secret_jwt_key_2026_defense_grade',
-      ),
+      secretOrKey: requireSecret('JWT_SECRET', configService),
       passReqToCallback: true,
     });
   }

@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { requireSecret } from '../../common/utils/secrets';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
@@ -13,10 +14,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>(
-          'JWT_SECRET',
-          'idlms_super_secret_jwt_key_2026_defense_grade',
-        ),
+        secret: requireSecret('JWT_SECRET', configService),
         signOptions: {
           expiresIn: configService.get<string>('JWT_EXPIRES_IN', '1d'),
         },

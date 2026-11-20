@@ -53,10 +53,7 @@ const DEFAULT_PASSWORD = SEED_PASSWORD;
 
 // Must match the secret the backend signs/verifies QR tokens with, otherwise
 // QR verification of seeded permits would say "tampered".
-const QR_SECRET =
-  process.env.QR_SIGNING_SECRET ||
-  process.env.JWT_SECRET ||
-  'idlms_qr_secret_fallback_2026';
+const QR_SECRET = process.env.QR_SIGNING_SECRET || process.env.JWT_SECRET || '';
 
 // ---------------------------------------------------------------------------
 // Scenario plan — which permit state each driver index gets (0-based).

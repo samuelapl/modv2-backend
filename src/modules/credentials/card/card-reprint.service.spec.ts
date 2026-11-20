@@ -66,11 +66,8 @@ describe('CardReprintService', () => {
       printedById: null,
     });
 
-    // The new QR is signed for the NEW serial (default dev secret).
-    const verified = verifySignedQrToken(
-      swap.data.qrHashSignature,
-      'idlms_qr_secret_fallback_2026',
-    );
+    // The new QR is signed for the NEW serial (Ed25519).
+    const verified = verifySignedQrToken(swap.data.qrHashSignature);
     expect(verified.valid).toBe(true);
     expect(verified.payload).toMatchObject({
       cred: 'MOD-AUTH-2026-0042',

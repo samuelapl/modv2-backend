@@ -181,4 +181,43 @@ describe('MedicalService', () => {
       },
     });
   });
+
+  it('stamps the signed-in reviewer as the badge number, ignoring any client value', async () => {
+    mockTx.application.findUnique.mockResolvedValue({ type: 'NEW_AUTHORIZATION' });
+    mockPrisma.driverProfile.findUnique.mockResolvedValue({
+      id: 'drv-1',
+      userId: 'user-drv-1',
+      personnelStatus: PersonnelStatus.ACTIVE,
+    });
+    mockPrisma.application.findUnique.mockResolvedValue({
+      id: 'app-1',
+      driverProfileId: 'drv-1',
+      status: ApplicationStatus.MEDICAL_PENDING,
+    });
+    mockTx.medicalFitnessReview.create.mockResolvedValue({
+      id: 'med-2',
+      outcome: MedicalFitnessOutcome.FIT,
+      operationalRestrictions: [],
+    });
+
+    await service.recordReview(
+      {
+        driverProfileId: 'drv-1',
+        applicationId: 'app-1',
+        medicalFacility: 'Armed Forces Hospital',
+        reviewerBadgeNumber: 'SOMEONE-ELSE-999',
+        outcome: MedicalFitnessOutcome.FIT,
+        operationalRestrictions: [],
+        assessmentDate: '2026-11-01',
+        reviewDueDate: '2029-11-01',
+      },
+      medicalOfficer,
+    );
+
+    expect(mockTx.medicalFitnessReview.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ reviewerBadgeNumber: 'MOD-MED-001' }),
+      }),
+    );
+  });
 });

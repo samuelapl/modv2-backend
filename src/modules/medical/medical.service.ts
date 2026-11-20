@@ -421,7 +421,8 @@ export class MedicalService {
           driverProfileId: dto.driverProfileId,
           applicationId: dto.applicationId ?? null,
           medicalFacility: dto.medicalFacility.trim(),
-          reviewerBadgeNumber: dto.reviewerBadgeNumber.trim().toUpperCase(),
+          // Always the signed-in reviewer's own ID; never client-supplied.
+          reviewerBadgeNumber: reviewer.serviceNumber.trim().toUpperCase(),
           outcome: dto.outcome,
           operationalRestrictions: restrictions,
           assessmentDate,

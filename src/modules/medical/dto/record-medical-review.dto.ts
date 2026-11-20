@@ -27,10 +27,15 @@ export class RecordMedicalReviewDto {
   @IsNotEmpty()
   medicalFacility: string;
 
-  @ApiProperty({ example: 'MED-OF-4410' })
+  /**
+   * Ignored. The badge number is always taken from the signed-in reviewer's
+   * service number, so it cannot be typed or spoofed. Kept optional only so
+   * older clients that still send it are not rejected.
+   */
+  @ApiPropertyOptional({ deprecated: true, description: 'Ignored; set by the server from the signed-in user.' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  reviewerBadgeNumber: string;
+  reviewerBadgeNumber?: string;
 
   @ApiProperty({
     enum: MedicalFitnessOutcome,

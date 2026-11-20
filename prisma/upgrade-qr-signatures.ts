@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import { signCredentialPayloadAsymmetric } from '../src/modules/credentials/helpers/qr-signer.helper';
 

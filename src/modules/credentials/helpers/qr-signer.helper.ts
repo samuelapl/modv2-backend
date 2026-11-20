@@ -1,12 +1,15 @@
 import * as crypto from 'crypto';
 import * as QRCode from 'qrcode';
 import {
+  getEd25519KeyId,
   resolveEd25519PrivateKey,
   resolveEd25519PublicKey,
 } from './ed25519.keys';
+import { requireSecret } from '../../../common/utils/secrets';
 
 export interface SignedQrPayload {
   v?: number;
+  kid?: string;
   cred: string;
   serial: string;
   drv: string;
@@ -41,6 +44,7 @@ export function signCredentialPayloadAsymmetric(
 ): string {
   const canonical: SignedQrPayload = {
     v: 2,
+    kid: payload.kid || getEd25519KeyId(),
     cred: payload.cred,
     serial: payload.serial,
     drv: payload.drv,
@@ -240,15 +244,10 @@ export function verifySignedQrToken(
   return { valid: false, reason: 'Unknown token prefix or unsupported format' };
 }
 
-/** Signing secret: QR_SIGNING_SECRET, else JWT_SECRET, else a dev fallback. */
+/** Legacy IDLMS1 secret: QR_SIGNING_SECRET, else JWT_SECRET. Never a built-in default. */
 export function resolveQrSecret(config?: { get<T = string>(key: string): T | undefined }): string {
-  return (
-    config?.get<string>('QR_SIGNING_SECRET') ||
-    config?.get<string>('JWT_SECRET') ||
-    process.env.QR_SIGNING_SECRET ||
-    process.env.JWT_SECRET ||
-    'idlms_qr_secret_fallback_2026'
-  );
+  const configured = config?.get<string>('QR_SIGNING_SECRET') || process.env.QR_SIGNING_SECRET;
+  return configured ? requireSecret('QR_SIGNING_SECRET', config) : requireSecret('JWT_SECRET', config);
 }
 
 export async function generateQrDataUrl(token: string, width = 240): Promise<string> {
