@@ -57,9 +57,11 @@ export class RecordMedicalReviewDto {
   @IsDateString()
   assessmentDate: string;
 
-  @ApiProperty({ example: '2029-11-10' })
+  /** Not needed for UNFIT: the server sets it. Required for every other outcome. */
+  @ApiPropertyOptional({ example: '2029-11-10' })
+  @IsOptional()
   @IsDateString()
-  reviewDueDate: string;
+  reviewDueDate?: string;
 
   @ApiPropertyOptional({ example: '17312345-medical-fit.pdf' })
   @IsOptional()

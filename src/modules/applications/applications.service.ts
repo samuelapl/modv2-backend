@@ -135,6 +135,7 @@ const APPLICATION_INCLUDE = {
     },
   },
   medicalReviews: {
+    where: { voidedAt: null },
     orderBy: { assessmentDate: 'desc' as const },
     take: 1,
     select: {

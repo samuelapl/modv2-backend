@@ -12,6 +12,7 @@ import {
 import { PaginatedResult } from '../../common/dto/paginated-result.dto';
 import { Permission } from '../../common/enums/permissions.enum';
 import { RequestUserContext } from '../personnel/services/drivers.service';
+import { VoidMedicalReviewDto } from './dto/void-medical-review.dto';
 import { RecordMedicalReviewDto } from './dto/record-medical-review.dto';
 import { QueryMedicalDto } from './dto/query-medical.dto';
 import { QueryMedicalCandidatesDto } from './dto/query-medical-candidates.dto';
@@ -45,6 +46,8 @@ const SANITIZED_MEDICAL_SELECT = {
   assessmentDate: true,
   reviewDueDate: true,
   createdAt: true,
+  voidedAt: true,
+  voidReason: true,
   driverProfile: {
     select: {
       id: true,
@@ -104,18 +107,19 @@ export class MedicalService {
         this.prisma.application.count({
           where: {
             status: ApplicationStatus.MEDICAL_PENDING,
-            medicalReviews: { some: {} },
+            medicalReviews: { some: { voidedAt: null } },
           },
         }),
         this.prisma.medicalFitnessReview.count({
-          where: { outcome: { in: cleared } },
+          where: { outcome: { in: cleared }, voidedAt: null },
         }),
         this.prisma.medicalFitnessReview.count({
-          where: { outcome: MedicalFitnessOutcome.UNFIT },
+          where: { outcome: MedicalFitnessOutcome.UNFIT, voidedAt: null },
         }),
         this.prisma.medicalFitnessReview.count({
           where: {
             outcome: { in: cleared },
+            voidedAt: null,
             reviewDueDate: { gte: now, lte: soon },
           },
         }),
@@ -149,9 +153,11 @@ export class MedicalService {
         some: { batchSession: { batchId: query.batchId } },
       };
     }
-    if (query.reviewState === 'FIRST') where.medicalReviews = { none: {} };
+    if (query.reviewState === 'FIRST') {
+      where.medicalReviews = { none: { voidedAt: null } };
+    }
     if (query.reviewState === 'REEVALUATION') {
-      where.medicalReviews = { some: {} };
+      where.medicalReviews = { some: { voidedAt: null } };
     }
 
     if (query.search) {
@@ -201,6 +207,7 @@ export class MedicalService {
             },
           },
           medicalReviews: {
+            where: { voidedAt: null },
             orderBy: { assessmentDate: 'desc' },
             take: 3,
             select: {
@@ -322,6 +329,66 @@ export class MedicalService {
     return new PaginatedResult(items, total, page, limit);
   }
 
+  /**
+   * Voids a review recorded by mistake. The row is kept (audit trail) but it
+   * stops counting for eligibility, reports and workload. Only allowed while
+   * the application is still waiting for medical (or there is no application);
+   * the reviewer then records the review again.
+   */
+  async voidReview(
+    id: string,
+    dto: VoidMedicalReviewDto,
+    actor: RequestUserContext,
+  ) {
+    const review = await this.prisma.medicalFitnessReview.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        voidedAt: true,
+        application: { select: { status: true } },
+      },
+    });
+    if (!review) {
+      throw new AppNotFoundException(
+        'MEDICAL_REVIEW_NOT_FOUND',
+        {},
+        'Medical review not found.',
+      );
+    }
+    if (review.voidedAt) {
+      throw new AppBadRequestException(
+        'MEDICAL_REVIEW_ALREADY_VOIDED',
+        {},
+        'This medical review is already voided.',
+      );
+    }
+
+    // Voiding only makes sense while the application is still waiting for
+    // medical: the reviewer can then simply record the review again. Once the
+    // application has moved on (or been rejected) the result has already been
+    // acted on, so it can no longer be voided.
+    if (
+      review.application &&
+      review.application.status !== ApplicationStatus.MEDICAL_PENDING
+    ) {
+      throw new AppBadRequestException(
+        'MEDICAL_VOID_APPLICATION_MOVED',
+        { status: review.application.status },
+        'This review cannot be voided: its application has already moved to the next stage.',
+      );
+    }
+
+    return this.prisma.medicalFitnessReview.update({
+      where: { id },
+      data: {
+        voidedAt: new Date(),
+        voidedById: actor.id,
+        voidReason: dto.reason.trim(),
+      },
+      select: FULL_MEDICAL_SELECT,
+    });
+  }
+
   async recordReview(
     dto: RecordMedicalReviewDto,
     reviewer: RequestUserContext,
@@ -350,7 +417,11 @@ export class MedicalService {
     }
 
     const assessmentDate = new Date(dto.assessmentDate);
-    const reviewDueDate = new Date(dto.reviewDueDate);
+    // An UNFIT result has no next-review date: use one year as a placeholder.
+    const reviewDueDate =
+      dto.outcome === MedicalFitnessOutcome.UNFIT && !dto.reviewDueDate
+        ? new Date(assessmentDate.getTime() + 365 * DAY_MS)
+        : new Date(dto.reviewDueDate ?? '');
 
     if (
       Number.isNaN(assessmentDate.getTime()) ||
@@ -375,6 +446,19 @@ export class MedicalService {
     }
 
     const restrictions = Array.from(new Set(dto.operationalRestrictions || []));
+
+    // The medical certificate is the evidence for any non-plain-FIT decision.
+    if (
+      (dto.outcome === MedicalFitnessOutcome.FIT_WITH_RESTRICTIONS ||
+        dto.outcome === MedicalFitnessOutcome.UNFIT) &&
+      !dto.documentProofUrl?.trim()
+    ) {
+      throw new AppBadRequestException(
+        'MEDICAL_CERTIFICATE_REQUIRED',
+        { outcome: dto.outcome },
+        'A medical certificate must be attached for this outcome.',
+      );
+    }
 
     if (
       dto.outcome === MedicalFitnessOutcome.FIT_WITH_RESTRICTIONS &&

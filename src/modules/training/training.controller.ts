@@ -27,6 +27,7 @@ import { UpdateCourseDto } from './dto/update-course.dto';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import { LogAttendanceDto } from './dto/log-attendance.dto';
 import { QueryEnrollmentsDto } from './dto/query-enrollments.dto';
+import { QueryWaitingDto } from './dto/query-waiting.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { BulkLogAttendanceDto } from './dto/bulk-log-attendance.dto';
 
@@ -110,6 +111,18 @@ export class TrainingController {
   @ApiOperation({ summary: 'List active practical trainers (Instructor role)' })
   findInstructors() {
     return this.service.findInstructors();
+  }
+
+  @Get('waiting')
+  @RequireAnyPermission(
+    Permission.TRAINING_MANAGE_COURSES,
+    Permission.TRAINING_LOG_ATTENDANCE,
+  )
+  @ApiOperation({
+    summary: 'People waiting to be enrolled in a training batch',
+  })
+  findWaiting(@Query() query: QueryWaitingDto) {
+    return this.service.findWaiting(query);
   }
 
   @Get('candidates')

@@ -25,7 +25,10 @@ async function main() {
       description:
         'Super administrator: holds every permission in the system, including technical configuration, accounts, role templates and reference data.',
       // Every permission in the catalog, so new permissions are picked up on the next seed.
-      permissions: Object.values(Permission),
+      // Separation of duties: an administrator cannot certify medical fitness.
+      permissions: Object.values(Permission).filter(
+        (p) => p !== Permission.MEDICAL_RECORD_FIT,
+      ),
     },
     {
       role: SystemRole.CENTRAL_LICENSING_ADMIN,

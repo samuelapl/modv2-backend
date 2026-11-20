@@ -107,6 +107,7 @@ export class EligibilityService {
           },
         },
         medicalReviews: {
+          where: { voidedAt: null },
           orderBy: { assessmentDate: 'desc' },
           take: 1,
           select: {
@@ -262,6 +263,7 @@ export class EligibilityService {
           },
         },
         medicalReviews: {
+          where: { voidedAt: null },
           orderBy: { assessmentDate: 'desc' },
           take: 1,
           select: {

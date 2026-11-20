@@ -107,7 +107,7 @@ export class ReportsService {
         where: { ...driverRelWhere, isActive: true },
       }),
       this.prisma.medicalFitnessReview.findMany({
-        where: driverRelWhere,
+        where: { ...driverRelWhere, voidedAt: null },
         distinct: ['driverProfileId'],
         orderBy: { assessmentDate: 'desc' },
         select: { outcome: true },

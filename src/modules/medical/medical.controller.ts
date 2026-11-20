@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../common/decorators/public.decorator';
 import { AuditMeta } from '../../common/decorators/audit.decorator';
@@ -10,6 +10,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Permission } from '../../common/enums/permissions.enum';
 import { RequestUserContext } from '../personnel/services/drivers.service';
 import { MedicalService } from './medical.service';
+import { VoidMedicalReviewDto } from './dto/void-medical-review.dto';
 import { RecordMedicalReviewDto } from './dto/record-medical-review.dto';
 import { QueryMedicalDto } from './dto/query-medical.dto';
 import { QueryMedicalCandidatesDto } from './dto/query-medical-candidates.dto';
@@ -59,6 +60,18 @@ export class MedicalController {
     @CurrentUser() user: RequestUserContext,
   ) {
     return this.service.findAll(query, user);
+  }
+
+  @Post(':id/void')
+  @AuditMeta('VOID_MEDICAL_REVIEW', 'MedicalFitnessReview', 'medicalFitnessReview')
+  @RequirePermissions(Permission.MEDICAL_RECORD_FIT)
+  @ApiOperation({ summary: 'Void a medical review recorded by mistake (kept for audit)' })
+  voidReview(
+    @Param('id') id: string,
+    @Body() dto: VoidMedicalReviewDto,
+    @CurrentUser() user: RequestUserContext,
+  ) {
+    return this.service.voidReview(id, dto, user);
   }
 
   @Post()

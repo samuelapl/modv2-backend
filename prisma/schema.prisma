@@ -453,6 +453,12 @@ model MedicalFitnessReview {
   documentProofUrl        String? // MinIO path to fitness certificate
   createdAt               DateTime              @default(now())
 
+  // A wrong review is voided, never edited or deleted: the row stays for the
+  // audit trail but no longer counts for eligibility, reports or the workload.
+  voidedAt   DateTime?
+  voidedById String?
+  voidReason String?
+
   // Note: Strictly NO diagnosis notes stored in IDLMS!
 }
 

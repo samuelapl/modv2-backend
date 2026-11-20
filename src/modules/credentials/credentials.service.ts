@@ -209,6 +209,7 @@ export class CredentialsService {
             },
           },
           medicalReviews: {
+            where: { voidedAt: null },
             orderBy: { assessmentDate: 'desc' },
             take: 1,
             select: {
@@ -388,6 +389,7 @@ export class CredentialsService {
         driverProfile: {
           include: {
             medicalReviews: {
+              where: { voidedAt: null },
               orderBy: { assessmentDate: 'desc' },
               take: 1,
             },

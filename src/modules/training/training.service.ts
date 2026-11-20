@@ -25,6 +25,7 @@ import { UpdateCourseDto } from './dto/update-course.dto';
 import { CreateEnrollmentDto } from './dto/create-enrollment.dto';
 import { LogAttendanceDto } from './dto/log-attendance.dto';
 import { QueryEnrollmentsDto } from './dto/query-enrollments.dto';
+import { QueryWaitingDto } from './dto/query-waiting.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { BulkLogAttendanceDto } from './dto/bulk-log-attendance.dto';
 
@@ -649,6 +650,74 @@ export class TrainingService {
   }
 
   /**
+   * Everyone waiting to be enrolled: TRAINING_PENDING applications with at
+   * least one requested category that has no planned / running / completed
+   * enrollment yet. One row per application, listing the categories still
+   * waiting.
+   */
+  async findWaiting(query: QueryWaitingDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+    const search = query.search?.trim();
+    const onlyCategory = query.categoryCode?.trim().toUpperCase();
+
+    const applications = await this.prisma.application.findMany({
+      where: {
+        status: ApplicationStatus.TRAINING_PENDING,
+        driverProfile: { personnelStatus: { notIn: INELIGIBLE_PERSONNEL } },
+        ...(search
+          ? {
+              OR: [
+                { applicationNumber: { contains: search, mode: 'insensitive' as const } },
+                { driverProfile: { fullName: { contains: search, mode: 'insensitive' as const } } },
+                { driverProfile: { serviceNumber: { contains: search, mode: 'insensitive' as const } } },
+              ],
+            }
+          : {}),
+      },
+      select: {
+        id: true,
+        applicationNumber: true,
+        type: true,
+        updatedAt: true,
+        driverProfile: {
+          select: {
+            id: true,
+            serviceNumber: true,
+            fullName: true,
+            rank: true,
+            photoUrl: true,
+            unit: { select: { code: true, name: true } },
+          },
+        },
+        requestedCategories: { select: { category: { select: { code: true } } } },
+        trainingEnrollments: {
+          where: { status: { in: BLOCKING_ENROLLMENT_STATUSES } },
+          select: { categoryCode: true },
+        },
+      },
+      orderBy: { updatedAt: 'asc' },
+    });
+
+    const rows = applications
+      .map(({ requestedCategories, trainingEnrollments, ...app }) => {
+        const covered = new Set(trainingEnrollments.map((e) => e.categoryCode));
+        const waitingCategories = requestedCategories
+          .map((r) => r.category.code)
+          .filter((code) => !covered.has(code));
+        return { ...app, waitingCategories };
+      })
+      .filter(
+        (r) =>
+          r.waitingCategories.length > 0 &&
+          (!onlyCategory || r.waitingCategories.includes(onlyCategory)),
+      );
+
+    const items = rows.slice((page - 1) * limit, page * limit);
+    return new PaginatedResult(items, rows.length, page, limit);
+  }
+
+  /**
    * TRAINING_PENDING applications that request the given category and have
    * no planned / running / completed enrollment for that category yet.
    */
@@ -1113,6 +1182,18 @@ export class TrainingService {
         'TRAINING_SEPARATION_OF_DUTIES',
         {},
         'Separation of Duties: You cannot log or sign off your own training hours.',
+      );
+    }
+
+    // Attended hours cannot be more than the course itself.
+    if (dto.hoursAttended > enrollment.course.durationHours) {
+      throw new AppBadRequestException(
+        'TRAINING_HOURS_EXCEED_COURSE',
+        {
+          hours: dto.hoursAttended,
+          required: enrollment.course.durationHours,
+        },
+        `Attended hours (${dto.hoursAttended}h) cannot exceed the course length (${enrollment.course.durationHours}h).`,
       );
     }
 

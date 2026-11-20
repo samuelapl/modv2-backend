@@ -37,7 +37,7 @@ describe('TrainingService', () => {
     },
     vehicleCategory: { findUnique: jest.fn(), findMany: jest.fn() },
     driverProfile: { findUnique: jest.fn() },
-    application: { findUnique: jest.fn() },
+    application: { findUnique: jest.fn(), findMany: jest.fn() },
     trainingEnrollment: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
@@ -324,6 +324,24 @@ describe('TrainingService', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
+  it('rejects attended hours above the course length', async () => {
+    mockPrisma.trainingEnrollment.findUnique.mockResolvedValue({
+      id: 'enr-1',
+      driverProfile: { userId: 'user-drv-1' },
+      course: { durationHours: 40 },
+    });
+
+    await expect(
+      service.logAttendance(
+        'enr-1',
+        { hoursAttended: 41, status: CourseStatus.IN_PROGRESS },
+        instructorUser,
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'TRAINING_HOURS_EXCEED_COURSE' }),
+    });
+  });
+
   it('requires notes when marking FAILED', async () => {
     mockPrisma.trainingEnrollment.findUnique.mockResolvedValue({
       id: 'enr-1',
@@ -384,6 +402,49 @@ describe('TrainingService', () => {
         status: ApplicationStatus.EXAM_PENDING,
         currentStage: 'Awaiting Theory & Practical Exams',
       },
+    });
+  });
+
+  describe('findWaiting', () => {
+    const app = (id: string, cats: string[], enrolled: string[]) => ({
+      id,
+      applicationNumber: `APP-${id}`,
+      type: 'NEW_AUTHORIZATION',
+      updatedAt: new Date('2026-11-01'),
+      driverProfile: { id: `d-${id}`, serviceNumber: `MOD-${id}`, fullName: `Driver ${id}`, unit: { code: 'LOG' } },
+      requestedCategories: cats.map((code) => ({ category: { code } })),
+      trainingEnrollments: enrolled.map((categoryCode) => ({ categoryCode })),
+    });
+
+    it('lists only categories that still have no enrollment and skips fully enrolled applications', async () => {
+      mockPrisma.application.findMany.mockResolvedValue([
+        app('1', ['CAT-HV', 'CAT-LV'], ['CAT-HV']), // LV still waiting
+        app('2', ['CAT-HV'], ['CAT-HV']), // fully enrolled: not waiting
+        app('3', ['CAT-MV'], []), // waiting
+      ]);
+
+      const res = await service.findWaiting({ page: 1, limit: 10 } as any);
+
+      expect(res.total).toBe(2);
+      expect(res.items.map((r: any) => [r.id, r.waitingCategories])).toEqual([
+        ['1', ['CAT-LV']],
+        ['3', ['CAT-MV']],
+      ]);
+      expect(mockPrisma.application.findMany.mock.calls[0][0].where.status).toBe(
+        ApplicationStatus.TRAINING_PENDING,
+      );
+    });
+
+    it('filters by category and paginates', async () => {
+      mockPrisma.application.findMany.mockResolvedValue([
+        app('1', ['CAT-HV'], []),
+        app('2', ['CAT-HV'], []),
+        app('3', ['CAT-LV'], []),
+      ]);
+      const res = await service.findWaiting({ page: 2, limit: 1, categoryCode: 'cat-hv' } as any);
+      expect(res.total).toBe(2);
+      expect(res.items).toHaveLength(1);
+      expect((res.items[0] as any).id).toBe('2');
     });
   });
 });
