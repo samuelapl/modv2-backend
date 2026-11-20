@@ -45,6 +45,13 @@ export class CredentialsController {
     return this.service.getStatus();
   }
 
+  @Public()
+  @Get('public-key')
+  @ApiOperation({ summary: 'Get MoD Ed25519 Public Key for offline permit verification' })
+  getPublicKey() {
+    return this.service.getPublicKeyInfo();
+  }
+
   @Get('stats')
   @RequireAnyPermission(
     Permission.CREDENTIALS_ISSUE,

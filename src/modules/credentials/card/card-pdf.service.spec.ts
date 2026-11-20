@@ -6,7 +6,9 @@ import { sampleCardData } from './card.fixture';
 /** Real Chromium: proves the PDF is exactly two CR80 pages with the embedded font. */
 describe('CardPdfService (real Chromium)', () => {
   const service = new CardPdfService();
-  afterAll(() => service.onModuleDestroy());
+  afterAll(async () => {
+    await service.onModuleDestroy();
+  }, 30_000);
 
   it('renders a 2-page 85.6 x 53.98 mm PDF', async () => {
     const pdf = await service.render(renderCard(await sampleCardData(), loadCardAssets()));

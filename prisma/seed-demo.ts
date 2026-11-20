@@ -436,10 +436,13 @@ async function main() {
         cred: credentialNumber,
         serial: serialNumber,
         drv: serviceNumber,
+        name: `${firstName} ${middleName} ${lastName}`,
+        nameAm: fullNameAm,
+        rank,
         cats: driverCats.map((c) => c.code),
+        iss: issueDate.toISOString(),
         exp: expiryDate.toISOString(),
       },
-      QR_SECRET,
     );
     const applicationNumber = `APP-${year}-${pad(++appSeq, 5)}`;
 

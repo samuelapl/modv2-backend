@@ -11,10 +11,16 @@ describe('CardReprintService', () => {
     serialNumber: 'SN-MOD-2026-OLDOLD',
     cardIssued: true,
     status: CredentialStatus.ACTIVE,
-    expiryDate: new Date('2099-10-19'),
+    issueDate: new Date('2026-01-15T00:00:00.000Z'),
+    expiryDate: new Date('2099-10-19T00:00:00.000Z'),
     printCount: 1,
     categories: [{ category: { code: 'CAT-HV' } }],
-    driverProfile: { serviceNumber: 'MOD-DEMO-006' },
+    driverProfile: {
+      serviceNumber: 'MOD-DEMO-006',
+      fullName: 'Abebe Bikila',
+      fullNameAm: 'አበበ ቢቂላ',
+      rank: 'Captain',
+    },
     ...over,
   });
 

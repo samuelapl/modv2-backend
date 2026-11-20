@@ -183,7 +183,7 @@ describe('CredentialsService', () => {
     });
     expect(issued.credentialNumber).toMatch(/^MOD-AUTH-\d{4}-0001$/);
     expect(issued.activeRestrictions).toEqual(['CORRECTIVE_LENSES']);
-    expect(issued.qrHashSignature).toMatch(/^IDLMS1\./);
+    expect(issued.qrHashSignature).toMatch(/^IDLMS2\./);
     expect(issued.qrDataUrl).toMatch(/^data:image\/png;base64,/);
   });
 
@@ -533,5 +533,18 @@ describe('CredentialsService', () => {
     expect(res.cryptographicValid).toBe(false);
     expect(res.valid).toBe(false);
     expect(res.status).toBe('INVALID_SIGNATURE');
+
+    const res2 = await service.verifyQrToken('IDLMS2.tamperedPayload.deadbeef');
+    expect(res2.cryptographicValid).toBe(false);
+    expect(res2.valid).toBe(false);
+    expect(res2.status).toBe('INVALID_SIGNATURE');
+  });
+
+  it('getPublicKeyInfo returns Ed25519 public key metadata for offline verification', () => {
+    const info = service.getPublicKeyInfo();
+    expect(info.algorithm).toBe('Ed25519');
+    expect(info.publicKeyPem).toContain('BEGIN PUBLIC KEY');
+    expect(info.rawPublicKeyHex).toHaveLength(64);
+    expect(info.rawPublicKeyBase64).toBeDefined();
   });
 });

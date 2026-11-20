@@ -45,6 +45,7 @@ import {
   signCredentialPayload,
   verifySignedQrToken,
 } from './helpers/qr-signer.helper';
+import { getEd25519PublicKeyInfo } from './helpers/ed25519.keys';
 
 const INELIGIBLE_PERSONNEL: PersonnelStatus[] = [
   PersonnelStatus.SUSPENDED,
@@ -615,7 +616,11 @@ export class CredentialsService {
           cred: credentialNumber,
           serial: serialNumber,
           drv: app.driverProfile.serviceNumber,
+          name: app.driverProfile.fullName || undefined,
+          nameAm: app.driverProfile.fullNameAm || undefined,
+          rank: app.driverProfile.rank || undefined,
           cats: endorsedCategories.map((c) => c.code),
+          iss: issueDate.toISOString(),
           exp: expiryDate.toISOString(),
         },
         secret,
@@ -835,6 +840,8 @@ export class CredentialsService {
 
     return {
       cryptographicValid: true,
+      algorithm: signatureCheck.algorithm,
+      version: signatureCheck.version,
       valid: isActive,
       status: isExpired ? CredentialStatus.EXPIRED : credential.status,
       isExpired,
@@ -843,6 +850,10 @@ export class CredentialsService {
         : `Credential is ${isExpired ? 'EXPIRED' : credential.status}.`,
       credential,
     };
+  }
+
+  getPublicKeyInfo() {
+    return getEd25519PublicKeyInfo(this.configService);
   }
 
   private async generateCredentialNumber(

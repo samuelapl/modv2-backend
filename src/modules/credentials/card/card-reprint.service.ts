@@ -31,7 +31,14 @@ export class CardReprintService {
       where: { id },
       include: {
         categories: { include: { category: { select: { code: true } } } },
-        driverProfile: { select: { serviceNumber: true } },
+        driverProfile: {
+          select: {
+            serviceNumber: true,
+            fullName: true,
+            fullNameAm: true,
+            rank: true,
+          },
+        },
       },
     });
     if (!cred) {
@@ -65,7 +72,11 @@ export class CardReprintService {
           cred: cred.credentialNumber,
           serial: newSerial,
           drv: cred.driverProfile.serviceNumber,
+          name: cred.driverProfile.fullName || undefined,
+          nameAm: cred.driverProfile.fullNameAm || undefined,
+          rank: cred.driverProfile.rank || undefined,
           cats: cred.categories.map((c) => c.category.code),
+          iss: cred.issueDate ? cred.issueDate.toISOString() : undefined,
           exp: cred.expiryDate.toISOString(),
         },
         secret,

@@ -22,7 +22,10 @@ describe('AuthService', () => {
   let keycloakAdminService: { findUserByServiceNumber: jest.Mock };
   let keycloakProvider: { verifyPassword: jest.Mock; hashPassword: jest.Mock; changePassword: jest.Mock; updateIdentity: jest.Mock };
 
+  const originalIdp = process.env.IDENTITY_PROVIDER;
+
   beforeEach(async () => {
+    process.env.IDENTITY_PROVIDER = 'local';
     prisma = {
       user: {
         findUnique: jest.fn(),
@@ -468,5 +471,9 @@ describe('AuthService', () => {
       expect(result.passwordChanged).toBe(true);
       expect(redis.set).toHaveBeenCalled();
     });
+  });
+
+  afterAll(() => {
+    process.env.IDENTITY_PROVIDER = originalIdp;
   });
 });
