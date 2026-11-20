@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
@@ -30,6 +31,8 @@ import { QueryEnrollmentsDto } from './dto/query-enrollments.dto';
 import { QueryWaitingDto } from './dto/query-waiting.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { BulkLogAttendanceDto } from './dto/bulk-log-attendance.dto';
+import { BulkMarkAttendanceDto } from './dto/bulk-mark-attendance.dto';
+import { MarkAttendanceDto } from './dto/mark-attendance.dto';
 
 @ApiTags('Training')
 @ApiBearerAuth('JWT-auth')
@@ -171,6 +174,19 @@ export class TrainingController {
     return this.service.createBatch(dto, user);
   }
 
+  @Post('attendance/bulk')
+  @SkipAutoAudit()
+  @RequirePermissions(Permission.TRAINING_LOG_ATTENDANCE)
+  @ApiOperation({
+    summary: 'Mark date-based training attendance in bulk (all days or specific day)',
+  })
+  bulkMarkAttendance(
+    @Body() dto: BulkMarkAttendanceDto,
+    @CurrentUser() user: RequestUserContext,
+  ) {
+    return this.service.bulkMarkAttendance(dto, user);
+  }
+
   @Patch('enrollments/bulk-attendance')
   @SkipAutoAudit()
   @RequirePermissions(Permission.TRAINING_LOG_ATTENDANCE)
@@ -183,6 +199,18 @@ export class TrainingController {
     @CurrentUser() user: RequestUserContext,
   ) {
     return this.service.bulkLogAttendance(dto, user);
+  }
+
+  @Put('enrollments/:id/attendance')
+  @SkipAutoAudit()
+  @RequirePermissions(Permission.TRAINING_LOG_ATTENDANCE)
+  @ApiOperation({ summary: 'Set attended training dates for an enrollment' })
+  setAttendance(
+    @Param('id') id: string,
+    @Body() dto: MarkAttendanceDto,
+    @CurrentUser() user: RequestUserContext,
+  ) {
+    return this.service.setAttendance(id, dto, user);
   }
 
   @Patch('enrollments/:id/attendance')

@@ -394,8 +394,22 @@ model TrainingEnrollment {
   completionDate  DateTime?
   certificateUrl  String? // MinIO link
   notes           String?
+  attendanceDays  TrainingAttendanceDay[]
 
   createdAt DateTime @default(now())
+}
+
+// One row per training day the trainee attended. Absent days have no row.
+model TrainingAttendanceDay {
+  id           String             @id @default(uuid())
+  enrollmentId String
+  enrollment   TrainingEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  date         DateTime           @db.Date
+  markedById   String?
+  createdAt    DateTime           @default(now())
+
+  @@unique([enrollmentId, date])
+  @@index([date])
 }
 
 enum ExamType {
@@ -677,4 +691,15 @@ model Notification {
   @@index([userId, status])
   @@index([userId, createdAt])
   @@index([category])
+}
+
+// -------------------------------------------------------------
+// 11. POLICIES (admin-configurable rules; definitions live in code)
+// -------------------------------------------------------------
+
+model Policy {
+  key         String   @id // e.g. "training.minAttendancePercent"
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
 }

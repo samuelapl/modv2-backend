@@ -7,6 +7,7 @@ import {
   SystemRole,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PoliciesService } from '../policies/policies.service';
 import { TrainingService } from './training.service';
 
 describe('TrainingService — batch enrollment', () => {
@@ -72,7 +73,11 @@ describe('TrainingService — batch enrollment', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
-      providers: [TrainingService, { provide: PrismaService, useValue: mockPrisma }],
+      providers: [
+        TrainingService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: PoliciesService, useValue: { getNumber: jest.fn().mockResolvedValue(100) } },
+      ],
     }).compile();
     service = module.get(TrainingService);
 

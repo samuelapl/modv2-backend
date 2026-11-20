@@ -64,4 +64,7 @@ export enum Permission {
   AUDIT_VIEW_LOGS = 'audit:view_logs',
   AUDIT_EXPORT = 'audit:export',
   REPORTS_VIEW = 'reports:view',
+
+  // 14. Policies (admin-configurable rules)
+  POLICIES_MANAGE = 'policies:manage',
 }

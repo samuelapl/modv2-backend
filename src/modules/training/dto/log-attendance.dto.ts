@@ -10,10 +10,12 @@ import {
 } from 'class-validator';
 
 export class LogAttendanceDto {
-  @ApiProperty({ example: 40, minimum: 0 })
+  /** Optional: the day-by-day attendance now decides completion. */
+  @ApiPropertyOptional({ example: 40, minimum: 0 })
+  @IsOptional()
   @IsInt()
   @Min(0)
-  hoursAttended: number;
+  hoursAttended?: number;
 
   @ApiProperty({ enum: CourseStatus, example: CourseStatus.COMPLETED })
   @IsEnum(CourseStatus)

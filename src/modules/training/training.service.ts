@@ -28,8 +28,13 @@ import { QueryEnrollmentsDto } from './dto/query-enrollments.dto';
 import { QueryWaitingDto } from './dto/query-waiting.dto';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { BulkLogAttendanceDto } from './dto/bulk-log-attendance.dto';
+import { BulkMarkAttendanceDto } from './dto/bulk-mark-attendance.dto';
+import { MarkAttendanceDto } from './dto/mark-attendance.dto';
+import { PoliciesService } from '../policies/policies.service';
+import { isoDate, toDateOnly, trainingDaysBetween } from './helpers/training-days';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MIN_ATTENDANCE_POLICY = 'training.minAttendancePercent';
 const BATCH_PREFIX = 'BATCH-';
 
 /** Enrollment statuses that block re-enrolling the same application/category. */
@@ -155,11 +160,15 @@ const ENROLLMENT_INCLUDE = {
       },
     },
   },
+  attendanceDays: { select: { date: true } },
 };
 
 @Injectable()
 export class TrainingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly policies: PoliciesService,
+  ) {}
 
   getStatus() {
     return {
@@ -479,7 +488,8 @@ export class TrainingService {
     ]);
 
     const withAttempts = await this.attachAttemptHistory(items);
-    return new PaginatedResult(withAttempts, total, page, limit);
+    const withDays = await this.withAttendance(withAttempts);
+    return new PaginatedResult(withDays, total, page, limit);
   }
 
   /**
@@ -1166,6 +1176,8 @@ export class TrainingService {
       include: {
         course: true,
         driverProfile: true,
+        batchSession: { select: { startDate: true, endDate: true } },
+        attendanceDays: { select: { date: true } },
       },
     });
 
@@ -1185,8 +1197,14 @@ export class TrainingService {
       );
     }
 
+    // Hours are no longer entered by hand; keep what is on file unless given.
+    const hoursAttended = dto.hoursAttended ?? enrollment.hoursAttended;
+    const trainingDays = enrollment.batchSession
+      ? trainingDaysBetween(enrollment.batchSession.startDate, enrollment.batchSession.endDate)
+      : [];
+
     // Attended hours cannot be more than the course itself.
-    if (dto.hoursAttended > enrollment.course.durationHours) {
+    if (dto.hoursAttended !== undefined && dto.hoursAttended > enrollment.course.durationHours) {
       throw new AppBadRequestException(
         'TRAINING_HOURS_EXCEED_COURSE',
         {
@@ -1197,18 +1215,37 @@ export class TrainingService {
       );
     }
 
-    if (
-      dto.status === CourseStatus.COMPLETED &&
-      dto.hoursAttended < enrollment.course.durationHours
-    ) {
-      throw new AppBadRequestException(
-        'TRAINING_COMPLETE_INSUFFICIENT_HOURS',
-        {
-          hours: dto.hoursAttended,
-          required: enrollment.course.durationHours,
-        },
-        `Cannot mark course COMPLETED with ${dto.hoursAttended}h attended; minimum ${enrollment.course.durationHours}h required.`,
-      );
+    if (dto.status === CourseStatus.COMPLETED) {
+      if (trainingDays.length > 0) {
+        // Day-by-day attendance decides, against the admin-set minimum percent.
+        const valid = new Set(trainingDays);
+        const attended = new Set(
+          (enrollment.attendanceDays ?? [])
+            .map((d) => isoDate(d.date))
+            .filter((d) => valid.has(d)),
+        ).size;
+        const required = await this.policies.getNumber(MIN_ATTENDANCE_POLICY);
+        if (attended * 100 < required * trainingDays.length) {
+          throw new AppBadRequestException(
+            'TRAINING_COMPLETE_BELOW_POLICY',
+            {
+              percent: Math.round((attended * 100) / trainingDays.length),
+              required,
+            },
+            `Attendance is ${Math.round((attended * 100) / trainingDays.length)}%; ${required}% is required to mark COMPLETED.`,
+          );
+        }
+      } else if (hoursAttended < enrollment.course.durationHours) {
+        // No training days on file (older records): fall back to hours.
+        throw new AppBadRequestException(
+          'TRAINING_COMPLETE_INSUFFICIENT_HOURS',
+          {
+            hours: hoursAttended,
+            required: enrollment.course.durationHours,
+          },
+          `Cannot mark course COMPLETED with ${hoursAttended}h attended; minimum ${enrollment.course.durationHours}h required.`,
+        );
+      }
     }
 
     if (dto.status === CourseStatus.FAILED && !dto.notes?.trim()) {
@@ -1223,7 +1260,7 @@ export class TrainingService {
       const updated = await tx.trainingEnrollment.update({
         where: { id },
         data: {
-          hoursAttended: dto.hoursAttended,
+          hoursAttended,
           status: dto.status,
           instructorId: officer.serviceNumber,
           completionDate:
@@ -1242,49 +1279,381 @@ export class TrainingService {
         dto.status === CourseStatus.COMPLETED &&
         enrollment.applicationId
       ) {
-        const app = await tx.application.findUnique({
-          where: { id: enrollment.applicationId },
-          include: {
-            requestedCategories: { include: { category: true } },
-          },
-        });
-
-        if (app && app.status === ApplicationStatus.TRAINING_PENDING) {
-          const completedEnrollments = await tx.trainingEnrollment.findMany({
-            where: {
-              applicationId: app.id,
-              status: CourseStatus.COMPLETED,
-            },
-            select: { categoryCode: true },
-          });
-          const completedCodes = new Set(
-            completedEnrollments.map((e) => e.categoryCode),
-          );
-          const requiredCodes = app.requestedCategories.map(
-            (rc) => rc.category.code,
-          );
-
-          if (
-            requiredCodes.length > 0 &&
-            requiredCodes.every((code) => completedCodes.has(code))
-          ) {
-            // Medical precedes training, so only the stages after training
-            // matter here (exam for new/additional, approval for reinstatement).
-            const nextStage =
-              resolveNextStage(app.type, ApplicationStatus.TRAINING_PENDING, []) ??
-              ApplicationStatus.READY_FOR_APPROVAL;
-            await tx.application.update({
-              where: { id: app.id },
-              data: {
-                status: nextStage,
-                currentStage: formatStageLabel(nextStage),
-              },
-            });
-          }
-        }
+        await this.advanceApplicationAfterCompletion(tx, enrollment.applicationId);
       }
 
       return updated;
     });
+  }
+
+  private async advanceApplicationAfterCompletion(
+    tx: Prisma.TransactionClient,
+    applicationId: string,
+  ) {
+    const app = await tx.application.findUnique({
+      where: { id: applicationId },
+      include: {
+        requestedCategories: { include: { category: true } },
+      },
+    });
+
+    if (app && app.status === ApplicationStatus.TRAINING_PENDING) {
+      const completedEnrollments = await tx.trainingEnrollment.findMany({
+        where: {
+          applicationId: app.id,
+          status: CourseStatus.COMPLETED,
+        },
+        select: { categoryCode: true },
+      });
+      const completedCodes = new Set(
+        completedEnrollments.map((e) => e.categoryCode),
+      );
+      const requiredCodes = app.requestedCategories.map(
+        (rc) => rc.category.code,
+      );
+
+      if (
+        requiredCodes.length > 0 &&
+        requiredCodes.every((code) => completedCodes.has(code))
+      ) {
+        // Medical precedes training, so only the stages after training
+        // matter here (exam for new/additional, approval for reinstatement).
+        const nextStage =
+          resolveNextStage(app.type, ApplicationStatus.TRAINING_PENDING, []) ??
+          ApplicationStatus.READY_FOR_APPROVAL;
+        await tx.application.update({
+          where: { id: app.id },
+          data: {
+            status: nextStage,
+            currentStage: formatStageLabel(nextStage),
+          },
+        });
+      }
+    }
+  }
+
+  private summarize(
+    e: {
+      batchSession?: { startDate: Date; endDate: Date } | null;
+      attendanceDays?: { date: Date }[];
+    },
+    requiredPercent: number,
+  ) {
+    const trainingDays = e.batchSession
+      ? trainingDaysBetween(e.batchSession.startDate, e.batchSession.endDate)
+      : [];
+    const inRange = new Set(trainingDays);
+    const attendedDates = [
+      ...new Set((e.attendanceDays ?? []).map((d) => isoDate(d.date))),
+    ]
+      .filter((d) => inRange.has(d))
+      .sort();
+    const percent = trainingDays.length
+      ? Math.round((attendedDates.length * 100) / trainingDays.length)
+      : 0;
+    return { trainingDays, attendedDates, percent, requiredPercent };
+  }
+
+  private async withAttendance<
+    T extends { batchSession?: any; attendanceDays?: any[] },
+  >(items: T[]) {
+    const requiredPercent = await this.policies.getNumber(MIN_ATTENDANCE_POLICY);
+    return items.map(({ attendanceDays, ...rest }) => ({
+      ...rest,
+      attendance: this.summarize(
+        { batchSession: (rest as any).batchSession, attendanceDays },
+        requiredPercent,
+      ),
+    }));
+  }
+
+  async setAttendance(
+    id: string,
+    dto: MarkAttendanceDto,
+    officer: RequestUserContext,
+  ) {
+    return this.applyAttendance(id, dto.attendedDates, officer, 'SET');
+  }
+
+  private async applyAttendance(
+    id: string,
+    dates: string[],
+    officer: RequestUserContext,
+    via: 'SET' | 'BULK',
+  ) {
+    const enrollment = await this.prisma.trainingEnrollment.findUnique({
+      where: { id },
+      include: {
+        course: true,
+        driverProfile: true,
+        batchSession: { select: { startDate: true, endDate: true } },
+        attendanceDays: { select: { date: true } },
+      },
+    });
+
+    if (!enrollment) {
+      throw new AppNotFoundException(
+        'TRAINING_ENROLLMENT_NOT_FOUND',
+        {},
+        'Training enrollment record not found.',
+      );
+    }
+
+    if (enrollment.driverProfile.userId === officer.id) {
+      throw new AppForbiddenException(
+        'TRAINING_SEPARATION_OF_DUTIES',
+        {},
+        'Separation of Duties: You cannot log or sign off your own training attendance.',
+      );
+    }
+
+    if (
+      enrollment.status === CourseStatus.COMPLETED ||
+      enrollment.status === CourseStatus.FAILED
+    ) {
+      throw new AppConflictException(
+        'TRAINING_ATTENDANCE_ALREADY_FINAL',
+        { outcome: enrollment.status.toLowerCase() },
+        `Cannot change attendance for a ${enrollment.status.toLowerCase()} training enrollment.`,
+      );
+    }
+
+    const trainingDays = enrollment.batchSession
+      ? trainingDaysBetween(
+          enrollment.batchSession.startDate,
+          enrollment.batchSession.endDate,
+        )
+      : [];
+    if (trainingDays.length === 0) {
+      throw new AppBadRequestException(
+        'TRAINING_NO_TRAINING_DAYS',
+        {},
+        'This enrollment is not part of a scheduled batch session with training days.',
+      );
+    }
+
+    const validDays = new Set(trainingDays);
+    const today = isoDate(new Date());
+    const wanted = [...new Set(dates)].sort();
+
+    const allowFuture =
+      process.env.NODE_ENV !== 'test' &&
+      (process.env.ALLOW_FUTURE_ATTENDANCE === 'true' ||
+        process.env.NODE_ENV !== 'production');
+
+    for (const d of wanted) {
+      if (!validDays.has(d)) {
+        throw new AppBadRequestException(
+          'TRAINING_ATTENDANCE_DATE_INVALID',
+          { date: d },
+          `Date ${d} is not a valid training day for this session.`,
+        );
+      }
+      if (!allowFuture && d > today) {
+        throw new AppBadRequestException(
+          'TRAINING_ATTENDANCE_DATE_FUTURE',
+          { date: d },
+          `Attendance cannot be marked for future date ${d}.`,
+        );
+      }
+    }
+
+    const required = await this.policies.getNumber(MIN_ATTENDANCE_POLICY);
+    const complete =
+      wanted.length > 0 && wanted.length * 100 >= required * trainingDays.length;
+    const status = complete
+      ? CourseStatus.COMPLETED
+      : wanted.length > 0
+        ? CourseStatus.IN_PROGRESS
+        : enrollment.status;
+    const hours = Math.round(
+      (enrollment.course.durationHours * wanted.length) / trainingDays.length,
+    );
+    const beforeCount = (enrollment.attendanceDays ?? []).length;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.trainingAttendanceDay.deleteMany({
+        where: {
+          enrollmentId: id,
+          date: { notIn: wanted.map(toDateOnly) },
+        },
+      });
+
+      if (wanted.length > 0) {
+        await tx.trainingAttendanceDay.createMany({
+          data: wanted.map((d) => ({
+            enrollmentId: id,
+            date: toDateOnly(d),
+            markedById: officer.id,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      const res = await tx.trainingEnrollment.update({
+        where: { id },
+        data: {
+          hoursAttended: hours,
+          status,
+          instructorId: officer.serviceNumber,
+          completionDate: complete ? new Date() : null,
+        },
+        include: ENROLLMENT_INCLUDE,
+      });
+
+      if (complete && enrollment.applicationId) {
+        await this.advanceApplicationAfterCompletion(tx, enrollment.applicationId);
+      }
+
+      await tx.auditLog.create({
+        data: {
+          userId: officer.id,
+          action: 'MARK_TRAINING_ATTENDANCE',
+          entityType: 'TrainingEnrollment',
+          entityId: id,
+          oldValue: {
+            attendedDays: beforeCount,
+            status: enrollment.status,
+          },
+          newValue: {
+            attendedDays: wanted.length,
+            totalDays: trainingDays.length,
+            status,
+            via,
+          },
+        },
+      });
+
+      return res;
+    });
+
+    const [withAttendanceResult] = await this.withAttendance([updated]);
+    return withAttendanceResult;
+  }
+
+  async bulkMarkAttendance(
+    dto: BulkMarkAttendanceDto,
+    officer: RequestUserContext,
+  ) {
+    if (dto.mode === 'DAY' && !dto.date) {
+      throw new AppBadRequestException(
+        'TRAINING_ATTENDANCE_DATE_INVALID',
+        { date: '' },
+        'Date is required when bulk marking attendance for a specific day.',
+      );
+    }
+
+    const ids = [...new Set(dto.enrollmentIds)];
+    const enrollments = await this.prisma.trainingEnrollment.findMany({
+      where: { id: { in: ids } },
+      include: {
+        driverProfile: true,
+        batchSession: { select: { startDate: true, endDate: true } },
+        attendanceDays: { select: { date: true } },
+      },
+    });
+    const byId = new Map(enrollments.map((e) => [e.id, e]));
+    const today = isoDate(new Date());
+
+    const results: Array<{
+      enrollmentId: string;
+      serviceNumber?: string;
+      fullName?: string;
+      status: 'UPDATED' | 'FAILED';
+      courseStatus?: CourseStatus;
+      error?: string;
+      errorCode?: string;
+      errorParams?: Record<string, unknown>;
+    }> = [];
+
+    for (const id of ids) {
+      const current = byId.get(id);
+      if (!current) {
+        results.push({
+          enrollmentId: id,
+          status: 'FAILED',
+          error: 'Training enrollment record not found.',
+          errorCode: 'TRAINING_ENROLLMENT_NOT_FOUND',
+          errorParams: {},
+        });
+        continue;
+      }
+
+      const who = {
+        serviceNumber: current.driverProfile.serviceNumber,
+        fullName: current.driverProfile.fullName,
+      };
+
+      try {
+        const trainingDays = current.batchSession
+          ? trainingDaysBetween(
+              current.batchSession.startDate,
+              current.batchSession.endDate,
+            )
+          : [];
+        if (trainingDays.length === 0) {
+          throw new AppBadRequestException(
+            'TRAINING_NO_TRAINING_DAYS',
+            {},
+            'This enrollment is not part of a scheduled batch session with training days.',
+          );
+        }
+
+        const existingAttended = (current.attendanceDays ?? []).map((d) =>
+          isoDate(d.date),
+        );
+        let wanted: string[];
+
+        if (dto.mode === 'ALL') {
+          const allowFuture =
+            process.env.NODE_ENV !== 'test' &&
+            (process.env.ALLOW_FUTURE_ATTENDANCE === 'true' ||
+              process.env.NODE_ENV !== 'production');
+          const daysSoFar = allowFuture
+            ? trainingDays
+            : trainingDays.filter((d) => d <= today);
+          if (daysSoFar.length === 0) {
+            throw new AppBadRequestException(
+              'TRAINING_ATTENDANCE_DATE_FUTURE',
+              { date: today },
+              'No training days have occurred yet.',
+            );
+          }
+          wanted = [...new Set([...existingAttended, ...daysSoFar])];
+        } else {
+          wanted = [...new Set([...existingAttended, dto.date!])];
+        }
+
+        const updated = await this.applyAttendance(id, wanted, officer, 'BULK');
+
+        results.push({
+          enrollmentId: id,
+          ...who,
+          status: 'UPDATED',
+          courseStatus: updated.status,
+        });
+      } catch (err: any) {
+        results.push({
+          enrollmentId: id,
+          ...who,
+          status: 'FAILED',
+          error: err?.message || 'Could not mark attendance.',
+          ...(err?.getResponse?.()?.code
+            ? {
+                errorCode: err.getResponse().code,
+                errorParams: err.getResponse().params ?? {},
+              }
+            : {}),
+        });
+      }
+    }
+
+    const updatedCount = results.filter((r) => r.status === 'UPDATED').length;
+    return {
+      totalRequested: ids.length,
+      updatedCount,
+      failedCount: ids.length - updatedCount,
+      results,
+    };
   }
 }

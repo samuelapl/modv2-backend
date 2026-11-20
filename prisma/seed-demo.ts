@@ -197,6 +197,80 @@ const pad = (n: number, w: number) => String(n).padStart(w, '0');
 
 // ---------------------------------------------------------------------------
 // Reset
+
+function getTrainingDays(start: Date, end: Date): Date[] {
+  const days: Date[] = [];
+  const cursor = new Date(start);
+  cursor.setUTCHours(0, 0, 0, 0);
+  const last = new Date(end);
+  last.setUTCHours(0, 0, 0, 0);
+  while (cursor.getTime() <= last.getTime()) {
+    const dow = cursor.getUTCDay();
+    if (dow !== 0 && dow !== 6) {
+      days.push(new Date(cursor));
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return days;
+}
+
+const sessionCache = new Map<string, { id: string; startDate: Date; endDate: Date }>();
+
+async function getOrCreateBatchSession(
+  tx: any,
+  batchCode: string,
+  categoryCode: string,
+  course: any,
+  startDate: Date,
+  endDate: Date,
+  creatorId: string,
+  instructorId: string,
+) {
+  const key = `${batchCode}:${categoryCode}`;
+  if (sessionCache.has(key)) {
+    return sessionCache.get(key)!;
+  }
+
+  let batch = await tx.trainingBatch.findUnique({ where: { batchCode } });
+  if (!batch) {
+    batch = await tx.trainingBatch.create({
+      data: {
+        batchCode,
+        notes: `MoD Driver Intake ${batchCode}`,
+        createdById: creatorId,
+        createdAt: startDate,
+      },
+    });
+  }
+
+  let session = await tx.trainingBatchSession.findUnique({
+    where: {
+      batchId_categoryCode: {
+        batchId: batch.id,
+        categoryCode,
+      },
+    },
+  });
+
+  if (!session) {
+    session = await tx.trainingBatchSession.create({
+      data: {
+        batchId: batch.id,
+        courseId: course.id,
+        categoryCode,
+        instructorUserId: instructorId,
+        startDate,
+        endDate,
+        createdAt: startDate,
+      },
+    });
+  }
+
+  const res = { id: session.id, startDate: session.startDate, endDate: session.endDate };
+  sessionCache.set(key, res);
+  return res;
+}
+
 // ---------------------------------------------------------------------------
 async function resetDemoData() {
   const users = await prisma.user.findMany({
@@ -226,7 +300,9 @@ async function resetDemoData() {
     prisma.credentialCategoryItem.deleteMany({ where: { credentialId: { in: credIds } } }),
     prisma.issuedCredential.deleteMany({ where: { id: { in: credIds } } }),
     prisma.applicationApproval.deleteMany({ where: { applicationId: { in: appIds } } }),
+    prisma.trainingAttendanceDay.deleteMany({ where: { enrollment: { driverProfileId: { in: profileIds } } } }),
     prisma.trainingEnrollment.deleteMany({ where: { driverProfileId: { in: profileIds } } }),
+    prisma.trainingBatch.deleteMany({ where: { notes: { startsWith: 'MoD Driver Intake' } } }),
     prisma.examinationRecord.deleteMany({ where: { driverProfileId: { in: profileIds } } }),
     prisma.medicalFitnessReview.deleteMany({ where: { driverProfileId: { in: profileIds } } }),
     prisma.applicationItem.deleteMany({ where: { applicationId: { in: appIds } } }),
@@ -303,7 +379,7 @@ async function main() {
   const staff = await prisma.user.findMany({
     where: {
       serviceNumber: {
-        in: ['MOD-LIC-001', 'MOD-CMDR-001', 'MOD-ISSUER-001', 'MOD-EXAM-001', 'MOD-MED-001', 'MOD-COORD-001', 'MOD-INST-001'],
+        in: ['MOD-LIC-001', 'MOD-CMDR-001', 'MOD-ISSUER-001', 'MOD-EXAM-001', 'MOD-MED-001', 'MOD-COORD-001', 'MOD-INST-001', 'MOD-TRN-001'],
       },
     },
   });
@@ -314,6 +390,8 @@ async function main() {
   const examiner = byService.get('MOD-EXAM-001');
   const medic = byService.get('MOD-MED-001');
   const coord = byService.get('MOD-COORD-001');
+  const instructor = byService.get('MOD-INST-001') ?? lic;
+  const trnAdmin = byService.get('MOD-TRN-001') ?? cmdr;
 
   if (units.length === 0 || categories.length === 0 || !lic || !cmdr || !issuer || !examiner || !medic || !coord) {
     throw new Error(
@@ -568,22 +646,54 @@ async function main() {
           },
         });
 
-        // 5. Training + exams for every category on the permit
+        // 5. Training + exams for every category on the permit (date-based attendance)
         for (const cat of driverCats) {
           const course = courses.find((c) => c.categoryCodes.includes(cat.code));
           if (course) {
-            await tx.trainingEnrollment.create({
+            const courseDays = course.durationDays || 30;
+            const trainingStart = addDays(trainingDone, -courseDays);
+            const batchYear = trainingStart.getFullYear();
+            const batchQuarter = Math.floor(trainingStart.getMonth() / 3) + 1;
+            const batchCode = `BATCH-${batchYear}-Q${batchQuarter}`;
+
+            const session = await getOrCreateBatchSession(
+              tx,
+              batchCode,
+              cat.code,
+              course,
+              trainingStart,
+              trainingDone,
+              trnAdmin.id,
+              instructor.id,
+            );
+
+            const enrollment = await tx.trainingEnrollment.create({
               data: {
                 driverProfileId: profile.id,
                 applicationId: application.id,
                 courseId: course.id,
                 categoryCode: cat.code,
+                batchSessionId: session.id,
+                instructorId: instructor.serviceNumber,
                 hoursAttended: course.durationHours,
                 status: CourseStatus.COMPLETED,
                 completionDate: trainingDone,
-                createdAt: addDays(trainingDone, -course.durationDays),
+                createdAt: session.startDate,
               },
             });
+
+            const sessionDays = getTrainingDays(session.startDate, session.endDate);
+            if (sessionDays.length > 0) {
+              await tx.trainingAttendanceDay.createMany({
+                data: sessionDays.map((d) => ({
+                  enrollmentId: enrollment.id,
+                  date: d,
+                  markedById: instructor.id,
+                  createdAt: d,
+                })),
+                skipDuplicates: true,
+              });
+            }
           }
           await tx.examinationRecord.createMany({
             data: [

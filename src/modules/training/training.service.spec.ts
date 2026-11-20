@@ -11,6 +11,7 @@ import {
   PersonnelStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PoliciesService } from '../policies/policies.service';
 import { TrainingService } from './training.service';
 
 describe('TrainingService', () => {
@@ -21,9 +22,16 @@ describe('TrainingService', () => {
       update: jest.fn(),
       findMany: jest.fn(),
     },
+    trainingAttendanceDay: {
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
     application: {
       findUnique: jest.fn(),
       update: jest.fn(),
+    },
+    auditLog: {
+      create: jest.fn(),
     },
   };
 
@@ -45,9 +53,21 @@ describe('TrainingService', () => {
       count: jest.fn(),
       create: jest.fn(),
       groupBy: jest.fn(),
+      update: jest.fn(),
+    },
+    trainingAttendanceDay: {
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
     },
     trainingBatchSession: { findMany: jest.fn() },
+    auditLog: {
+      create: jest.fn(),
+    },
     $transaction: jest.fn((fn: (tx: any) => any) => fn(mockTx)),
+  };
+
+  const mockPolicies = {
+    getNumber: jest.fn().mockResolvedValue(100),
   };
 
   const instructorUser = {
@@ -59,10 +79,12 @@ describe('TrainingService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockPolicies.getNumber.mockResolvedValue(100);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TrainingService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: PoliciesService, useValue: mockPolicies },
       ],
     }).compile();
 
@@ -402,6 +424,210 @@ describe('TrainingService', () => {
         status: ApplicationStatus.EXAM_PENDING,
         currentStage: 'Awaiting Theory & Practical Exams',
       },
+    });
+  });
+
+  describe('date-based attendance (setAttendance & bulkMarkAttendance)', () => {
+    // 2026-11-16 (Mon) to 2026-11-20 (Fri) = 5 training days
+    const batchSession = {
+      startDate: new Date('2026-11-16T08:00:00.000Z'),
+      endDate: new Date('2026-11-20T17:00:00.000Z'),
+    };
+
+    const baseEnrollment = {
+      id: 'enr-date-1',
+      status: CourseStatus.PLANNED,
+      hoursAttended: 0,
+      course: { durationHours: 40 },
+      driverProfile: { id: 'd-1', userId: 'driver-user-1', serviceNumber: 'MOD-DRV-001', fullName: 'Abebe Bikila' },
+      batchSession,
+      attendanceDays: [],
+      applicationId: 'app-1',
+    };
+
+    it('rejects self-marking attendance with Separation of Duties', async () => {
+      mockPrisma.trainingEnrollment.findUnique.mockResolvedValue({
+        ...baseEnrollment,
+        driverProfile: { ...baseEnrollment.driverProfile, userId: instructorUser.id },
+      });
+
+      await expect(
+        service.setAttendance('enr-date-1', { attendedDates: ['2026-11-16'] }, instructorUser),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('rejects attendance change on final COMPLETED or FAILED enrollment', async () => {
+      mockPrisma.trainingEnrollment.findUnique.mockResolvedValue({
+        ...baseEnrollment,
+        status: CourseStatus.COMPLETED,
+      });
+
+      await expect(
+        service.setAttendance('enr-date-1', { attendedDates: ['2026-11-16'] }, instructorUser),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('rejects enrollment without training days', async () => {
+      mockPrisma.trainingEnrollment.findUnique.mockResolvedValue({
+        ...baseEnrollment,
+        batchSession: null,
+      });
+
+      await expect(
+        service.setAttendance('enr-date-1', { attendedDates: ['2026-11-16'] }, instructorUser),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects non-training date (weekend)', async () => {
+      mockPrisma.trainingEnrollment.findUnique.mockResolvedValue(baseEnrollment);
+
+      await expect(
+        service.setAttendance('enr-date-1', { attendedDates: ['2026-11-21'] }, instructorUser),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'TRAINING_ATTENDANCE_DATE_INVALID' }),
+      });
+    });
+
+    it('rejects future date', async () => {
+      mockPrisma.trainingEnrollment.findUnique.mockResolvedValue({
+        ...baseEnrollment,
+        batchSession: {
+          startDate: new Date('2029-01-01T00:00:00.000Z'),
+          endDate: new Date('2029-01-10T00:00:00.000Z'),
+        },
+      });
+
+      await expect(
+        service.setAttendance('enr-date-1', { attendedDates: ['2029-01-02'] }, instructorUser),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'TRAINING_ATTENDANCE_DATE_FUTURE' }),
+      });
+    });
+
+    it('marks days -> IN_PROGRESS below required percent', async () => {
+      mockPrisma.trainingEnrollment.findUnique.mockResolvedValue(baseEnrollment);
+      mockPolicies.getNumber.mockResolvedValue(100);
+
+      mockTx.trainingEnrollment.update.mockResolvedValue({
+        ...baseEnrollment,
+        status: CourseStatus.IN_PROGRESS,
+        hoursAttended: 16,
+        attendanceDays: [{ date: new Date('2026-11-16') }, { date: new Date('2026-11-17') }],
+      });
+
+      const res = await service.setAttendance(
+        'enr-date-1',
+        { attendedDates: ['2026-11-16', '2026-11-17'] },
+        instructorUser,
+      );
+
+      expect(res.status).toBe(CourseStatus.IN_PROGRESS);
+      expect(mockTx.trainingAttendanceDay.deleteMany).toHaveBeenCalled();
+      expect(mockTx.trainingAttendanceDay.createMany).toHaveBeenCalled();
+      expect(mockTx.application.update).not.toHaveBeenCalled();
+      expect(mockTx.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'MARK_TRAINING_ATTENDANCE',
+            newValue: expect.objectContaining({ attendedDays: 2, status: CourseStatus.IN_PROGRESS }),
+          }),
+        }),
+      );
+    });
+
+    it('reaches policy % -> COMPLETED and auto-advances application to EXAM_PENDING', async () => {
+      mockPrisma.trainingEnrollment.findUnique.mockResolvedValue(baseEnrollment);
+      mockPolicies.getNumber.mockResolvedValue(80);
+
+      mockTx.trainingEnrollment.update.mockResolvedValue({
+        ...baseEnrollment,
+        status: CourseStatus.COMPLETED,
+        hoursAttended: 32,
+        attendanceDays: [
+          { date: new Date('2026-11-16') },
+          { date: new Date('2026-11-17') },
+          { date: new Date('2026-11-18') },
+          { date: new Date('2026-11-19') },
+        ],
+      });
+
+      mockTx.application.findUnique.mockResolvedValue({
+        id: 'app-1',
+        status: ApplicationStatus.TRAINING_PENDING,
+        requestedCategories: [{ category: { code: 'CAT-HV' } }],
+      });
+      mockTx.trainingEnrollment.findMany.mockResolvedValue([{ categoryCode: 'CAT-HV' }]);
+
+      const res = await service.setAttendance(
+        'enr-date-1',
+        { attendedDates: ['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19'] },
+        instructorUser,
+      );
+
+      expect(res.status).toBe(CourseStatus.COMPLETED);
+      expect(mockTx.application.update).toHaveBeenCalledWith({
+        where: { id: 'app-1' },
+        data: {
+          status: ApplicationStatus.EXAM_PENDING,
+          currentStage: 'Awaiting Theory & Practical Exams',
+        },
+      });
+    });
+
+    it('logAttendance COMPLETED is rejected with TRAINING_COMPLETE_BELOW_POLICY when below policy %', async () => {
+      mockPrisma.trainingEnrollment.findUnique.mockResolvedValue({
+        ...baseEnrollment,
+        attendanceDays: [{ date: new Date('2026-11-16') }],
+      });
+      mockPolicies.getNumber.mockResolvedValue(100);
+
+      await expect(
+        service.logAttendance('enr-date-1', { status: CourseStatus.COMPLETED }, instructorUser),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'TRAINING_COMPLETE_BELOW_POLICY' }),
+      });
+    });
+
+    it('bulkMarkAttendance handles ALL and DAY modes and isolates errors', async () => {
+      mockPolicies.getNumber.mockResolvedValue(100);
+      mockPrisma.trainingEnrollment.findMany.mockResolvedValue([
+        baseEnrollment,
+        {
+          ...baseEnrollment,
+          id: 'enr-date-2',
+          status: CourseStatus.COMPLETED,
+          driverProfile: { serviceNumber: 'MOD-DRV-002', fullName: 'Kebede' },
+        },
+      ]);
+
+      mockPrisma.trainingEnrollment.findUnique.mockImplementation(({ where }: any) => {
+        if (where.id === 'enr-date-1') return Promise.resolve(baseEnrollment);
+        if (where.id === 'enr-date-2')
+          return Promise.resolve({ ...baseEnrollment, id: 'enr-date-2', status: CourseStatus.COMPLETED });
+        return Promise.resolve(null);
+      });
+
+      mockTx.trainingEnrollment.update.mockResolvedValue({
+        ...baseEnrollment,
+        status: CourseStatus.IN_PROGRESS,
+        hoursAttended: 8,
+        attendanceDays: [{ date: new Date('2026-11-16') }],
+      });
+
+      const res = await service.bulkMarkAttendance(
+        {
+          enrollmentIds: ['enr-date-1', 'enr-date-2'],
+          mode: 'DAY',
+          date: '2026-11-16',
+        },
+        instructorUser,
+      );
+
+      expect(res.totalRequested).toBe(2);
+      expect(res.updatedCount).toBe(1);
+      expect(res.failedCount).toBe(1);
+      expect(res.results[0]).toMatchObject({ enrollmentId: 'enr-date-1', status: 'UPDATED' });
+      expect(res.results[1]).toMatchObject({ enrollmentId: 'enr-date-2', status: 'FAILED' });
     });
   });
 

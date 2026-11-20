@@ -28,6 +28,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { ExpiryModule } from './modules/expiry/expiry.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { PoliciesModule } from './modules/policies/policies.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     EventEmitterModule.forRoot(),
     ExpiryModule,
     NotificationsModule,
+    PoliciesModule,
   ],
   providers: [
     {

@@ -10,6 +10,7 @@ import { MEDICAL_ERROR_CODES } from './codes/medical';
 import { NATIONAL_LICENSE_ERROR_CODES } from './codes/national-license';
 import { NOTIFICATIONS_ERROR_CODES } from './codes/notifications';
 import { PERSONNEL_ERROR_CODES } from './codes/personnel';
+import { POLICIES_ERROR_CODES } from './codes/policies';
 import { SAFETY_ERROR_CODES } from './codes/safety';
 import { STORAGE_ERROR_CODES } from './codes/storage';
 import { TRAINING_ERROR_CODES } from './codes/training';
@@ -33,6 +34,7 @@ export const ERROR_CODES = [
   ...NATIONAL_LICENSE_ERROR_CODES,
   ...NOTIFICATIONS_ERROR_CODES,
   ...PERSONNEL_ERROR_CODES,
+  ...POLICIES_ERROR_CODES,
   ...SAFETY_ERROR_CODES,
   ...STORAGE_ERROR_CODES,
   ...TRAINING_ERROR_CODES,
