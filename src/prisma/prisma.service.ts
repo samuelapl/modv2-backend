@@ -9,9 +9,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     try {
       await this.$connect();
       this.logger.log('Connected to Ethiopian MoD PostgreSQL database successfully.');
-    } catch (error) {
-      this.logger.error('Failed to connect to PostgreSQL database:', error);
-      throw error;
+    } catch (error: any) {
+      this.logger.warn(`Initial PostgreSQL connection notice: ${error?.message || error}`);
     }
   }
 

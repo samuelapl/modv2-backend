@@ -10,23 +10,35 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   constructor(private configService: ConfigService) {}
 
   onModuleInit() {
-    const host = this.configService.get<string>('REDIS_HOST', 'localhost');
-    const port = this.configService.get<number>('REDIS_PORT', 6381);
+    const redisUrl = this.configService.get<string>('REDIS_URL');
+    if (redisUrl) {
+      this.client = new Redis(redisUrl, {
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+      });
+    } else {
+      const host = this.configService.get<string>('REDIS_HOST', 'localhost');
+      const port = Number(this.configService.get<number>('REDIS_PORT', 6380));
+      const password = this.configService.get<string>('REDIS_PASSWORD');
+      const tls = this.configService.get<string>('REDIS_TLS', 'false') === 'true';
 
-    this.client = new Redis({
-      host,
-      port,
-      lazyConnect: true,
-      maxRetriesPerRequest: 3,
-    });
+      this.client = new Redis({
+        host,
+        port,
+        password: password || undefined,
+        tls: tls ? { rejectUnauthorized: false } : undefined,
+        lazyConnect: true,
+        maxRetriesPerRequest: 3,
+      });
+    }
 
     this.client
       .connect()
       .then(() => {
-        this.logger.log(`Connected to Redis at ${host}:${port}`);
+        this.logger.log('Connected to Redis');
       })
       .catch((err) => {
-        this.logger.warn(`Redis connection warning at ${host}:${port}: ${err.message}`);
+        this.logger.warn(`Redis connection warning: ${err.message}`);
       });
   }
 

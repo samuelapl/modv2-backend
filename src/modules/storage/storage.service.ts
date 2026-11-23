@@ -25,8 +25,10 @@ export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
 
   constructor(private readonly configService: ConfigService) {
-    const endPoint = this.configService.get<string>('MINIO_ENDPOINT', 'localhost');
-    const port = Number(this.configService.get<number>('MINIO_PORT', 9004));
+    const rawEndPoint = this.configService.get<string>('MINIO_ENDPOINT', 'localhost');
+    const endPoint = rawEndPoint.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+    const rawPort = this.configService.get<string | number>('MINIO_PORT');
+    const port = rawPort !== undefined && rawPort !== '' ? Number(rawPort) : undefined;
     const useSSL =
       this.configService.get<string>('MINIO_USE_SSL', 'false') === 'true';
     const accessKey = this.configService.get<string>('MINIO_ACCESS_KEY', 'minio_admin');
